@@ -30,11 +30,9 @@ namespace kaldi {
 
 class SimpleForward {
  public:
-  typedef fst::LogArc LogArc;
-  typedef LogArc::Weight Weight;
-  typedef LogArc::Label Label;
-  typedef LogArc::StateId StateId;
-  typedef fst::Fst<LogArc> Fst;
+  typedef fst::StdArc::Label Label;
+  typedef fst::StdArc::StateId StateId;
+  typedef fst::Fst<fst::StdArc> Fst;
 
   SimpleForward(const Fst &fst, BaseFloat beam, BaseFloat loop_epsilon) :
       fst_(fst), beam_(beam), loop_epsilon_(loop_epsilon) { }
@@ -72,8 +70,13 @@ class SimpleForward {
   /// Returns the number of frames already decoded.
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
- private:
+  /// Returns the forward table of the in the input labels of the WFST
+  /// This typically is the forward table of the transition-ids
+  const std::vector<unordered_map<Label, double> >& GetTable() const {
+    return forward_;
+  }
 
+ private:
 
   // ProcessEmitting decodes the frame num_frames_decoded_ of the
   // decodable object, then increments num_frames_decoded_.
@@ -81,17 +84,21 @@ class SimpleForward {
 
   void ProcessNonemitting();
 
+  // Add a new row to the table, with the cost of each label (i.e.
+  // transition-id) reaching the end of the input.
+  void UpdateForwardTableFinal();
 
-  std::vector<unordered_map<Label, Weight> > forward_;
-  unordered_map<StateId, Weight> curr_toks_;
-  unordered_map<StateId, Weight> prev_toks_;
+  std::vector<unordered_map<Label, double> > forward_;
+  unordered_map<StateId, unordered_set<Label> > accessible_from_;
+  unordered_map<StateId, double> curr_toks_;
+  unordered_map<StateId, double> prev_toks_;
   const Fst &fst_;
   BaseFloat beam_;
   BaseFloat loop_epsilon_;
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
 
-  static void PruneToks(BaseFloat beam, unordered_map<StateId, Weight> *toks);
+  static void PruneToks(BaseFloat beam, unordered_map<StateId, double> *toks);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleForward);
 };
