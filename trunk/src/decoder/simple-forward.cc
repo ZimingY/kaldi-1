@@ -22,9 +22,6 @@
 
 namespace kaldi {
 
-#define COST_ADD(x, y) (-kaldi::LogAdd(-(x), -(y)))
-#define COST_MAX       (-kaldi::kLogZeroDouble)
-
 SimpleForward::~SimpleForward() {
   curr_toks_.clear();
   prev_toks_.clear();
@@ -36,12 +33,12 @@ bool SimpleForward::Decode(DecodableInterface *decodable) {
   while(!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     prev_toks_.clear();
     curr_toks_.swap(prev_toks_);
-    accessible_from_.clear();
     ProcessEmitting(decodable);
     ProcessNonemitting();
     PruneToks(beam_, &curr_toks_);
+    UpdateForwardTable();
   }
-  //UpdateForwardTableFinal();
+  UpdateForwardTableFinal();
   return (!curr_toks_.empty());
 }
 
@@ -51,11 +48,10 @@ void SimpleForward::InitDecoding() {
   curr_toks_.clear();
   prev_toks_.clear();
   forward_.clear();
-  accessible_from_.clear();
   // initialize decoding:
   StateId start_state = fst_.Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
-  curr_toks_[start_state] = 0.0;
+  curr_toks_[start_state] = Token();
   num_frames_decoded_ = 0;
   ProcessNonemitting();
 }
@@ -81,16 +77,17 @@ void SimpleForward::AdvanceDecoding(DecodableInterface *decodable,
     ProcessEmitting(decodable);
     ProcessNonemitting();
     PruneToks(beam_, &curr_toks_);
+    UpdateForwardTable();
   }
-  //UpdateForwardTableFinal();
+  UpdateForwardTableFinal();
 }
 
 
 bool SimpleForward::ReachedFinal() const {
-  for (unordered_map<StateId, double>::const_iterator iter = curr_toks_.begin();
-       iter != curr_toks_.end(); ++iter) {
-    if (iter->second != COST_MAX &&
-        fst_.Final(iter->first) != fst::StdArc::Weight::Zero())
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    if (tok->second.cost != -kaldi::kLogZeroDouble &&
+        fst_.Final(tok->first) != fst::StdArc::Weight::Zero())
       return true;
   }
   return false;
@@ -98,15 +95,19 @@ bool SimpleForward::ReachedFinal() const {
 
 
 double SimpleForward::FinalCost() const {
-  double total_cost = COST_MAX;
-  for (unordered_map<StateId, double>::const_iterator iter = curr_toks_.begin();
-       iter != curr_toks_.end(); ++iter) {
-    total_cost = COST_ADD(total_cost, iter->second + fst_.Final(iter->first).Value());
+  if (curr_toks_.empty()) {
+    return -kaldi::kLogZeroDouble;
+  }
+  TokenMap::const_iterator tok = curr_toks_.begin();
+  double total_cost = tok->second.cost + fst_.Final(tok->first).Value();
+  for (++tok; tok != curr_toks_.end(); ++tok) {
+    total_cost = -kaldi::LogAdd(
+        -total_cost, -(tok->second.cost + fst_.Final(tok->first).Value()));
   }
   if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
                                   // some kind of error, most likely.
     KALDI_WARN << "Found NaN (likely failure in decoding)";
-    return COST_MAX;
+    return -kaldi::kLogZeroDouble;
   }
   return total_cost;
 }
@@ -115,39 +116,19 @@ double SimpleForward::FinalCost() const {
 void SimpleForward::ProcessEmitting(DecodableInterface *decodable) {
   // Processes emitting arcs for one frame.  Propagates from prev_toks_ to
   // curr_toks_.
-  int32 frame = num_frames_decoded_;
-  forward_.push_back(unordered_map<Label, double>());
-  for (unordered_map<StateId, double>::iterator iter = prev_toks_.begin();
-       iter != prev_toks_.end(); ++iter) {
-    StateId state = iter->first;
-    const double cost_to_state = iter->second;
+  const int32 frame = num_frames_decoded_;
+  for (TokenMap::const_iterator ptok = prev_toks_.begin();
+       ptok != prev_toks_.end(); ++ptok) {
+    const StateId state = ptok->first;
     for (fst::ArcIterator<Fst> aiter(fst_, state); !aiter.Done();
          aiter.Next()) {
       const fst::StdArc& arc = aiter.Value();
-      if (arc.ilabel != 0) {
+      if (arc.ilabel != 0) {  // propagate emitting only...
         const double acoustic_cost =
             -decodable->LogLikelihood(frame, arc.ilabel);
-        const double path_cost =
-            cost_to_state + acoustic_cost + arc.weight.Value();
-
-        unordered_map<StateId, double>::iterator find_iter =
-            curr_toks_.find(arc.nextstate);
-        if (find_iter == curr_toks_.end()) {
-          curr_toks_[arc.nextstate] = path_cost;
-          unordered_set<Label> lbl_set; lbl_set.insert(arc.ilabel);
-          accessible_from_[arc.nextstate] = lbl_set;
-        } else {
-          find_iter->second = COST_ADD(find_iter->second, path_cost);
-          accessible_from_[arc.nextstate].insert(arc.ilabel);
-        }
-
-        unordered_map<Label, double>::iterator label_iter =
-            forward_.back().find(arc.ilabel);
-        if (label_iter == forward_.back().end()) {
-          forward_.back()[arc.ilabel] = path_cost;
-        } else {
-          label_iter->second = COST_ADD(label_iter->second, path_cost);
-        }
+        TokenMap::iterator ctok = curr_toks_.insert(
+            make_pair(arc.nextstate, Token(-kaldi::kLogZeroDouble))).first;
+        ctok->second.Update(ptok->second, arc, acoustic_cost);
       }
     }
   }
@@ -158,101 +139,97 @@ void SimpleForward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
   // curr_toks_.
   std::vector<StateId> queue_;
-  for (unordered_map<StateId, double>::iterator iter = curr_toks_.begin();
-       iter != curr_toks_.end(); ++iter) {
-    queue_.push_back(iter->first);
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    queue_.push_back(tok->first);
   }
 
   while (!queue_.empty()) {
-    StateId state = queue_.back();
-    const double cost_to_state = curr_toks_[state];
+    const StateId state = queue_.back();
+    TokenMap::const_iterator ptok = curr_toks_.find(state);
+#ifdef KALDI_PARANOID
+    KALDI_ASSERT(ptok != curr_toks_.end());
+#endif
     queue_.pop_back();
     for (fst::ArcIterator<Fst> aiter(fst_, state); !aiter.Done();
          aiter.Next()) {
       const fst::StdArc& arc = aiter.Value();
       if (arc.ilabel == 0) {  // propagate nonemitting only...
-        const double path_cost = cost_to_state + arc.weight.Value();
-        unordered_map<StateId, double>::iterator find_iter =
-            curr_toks_.find(arc.nextstate);
-        if (find_iter == curr_toks_.end()) {
-          curr_toks_[arc.nextstate] = path_cost;
-          accessible_from_[arc.nextstate] = accessible_from_[state];
+        TokenMap::iterator ctok = curr_toks_.insert(
+            make_pair(arc.nextstate, Token(-kaldi::kLogZeroDouble))).first;
+        const double old_cost_to_ctok = ctok->second.cost;
+        ctok->second.Update(ptok->second, arc.weight.Value());
+        // TODO(jpuigcerver): This tries to prevent the algorithm to hang
+        // with epsilon-loops. This should be able to detect convergence
+        // in the cost of the state, however it will still hang if the
+        // cost is divergent. Anyway, this solution will be slow in the
+        // case of an WFST with epsilon-cycles. Viterbi algorithm does not
+        // have this problem, as long as the cost of the epsilon-cycle is
+        // positive. Otherwise, the current implementation of the Decoder
+        // will hang as well.
+        if (!kaldi::ApproxEqual(
+                ctok->second.cost, old_cost_to_ctok, loop_epsilon_)) {
           queue_.push_back(arc.nextstate);
-        } else {
-          const double old_cost = find_iter->second;
-          find_iter->second = COST_ADD(find_iter->second, path_cost);
-          accessible_from_[arc.nextstate].insert(
-              accessible_from_[state].begin(), accessible_from_[state].end());
-
-          // TODO(jpuigcerver): This tries to prevent the algorithm to hang
-          // with epsilon-loops. This should be able to detect convergence
-          // in the cost of the state, however it will still hang if the
-          // cost is divergent. Anyway, this solution will be slow in the
-          // case of an WFST with epsilon-cycles. Viterbi algorithm does not
-          // have this problem, as long as the cost of the epsilon-cycle is
-          // positive. Otherwise, the current implementation of the Decoder
-          // will hang anyway.
-          if (!kaldi::ApproxEqual(find_iter->second, old_cost, loop_epsilon_)) {
-            queue_.push_back(arc.nextstate);
-          }
         }
       }
+    }
+  }
+}
+
+
+void SimpleForward::UpdateForwardTable() {
+  forward_.push_back(unordered_map<Label, double>());
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
+         ti != tok->second.ilabels.end(); ++ti) {
+      LabelMap::iterator fi = forward_.back().insert(
+          make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
+      fi->second = -kaldi::LogAdd(-fi->second, -ti->second);
     }
   }
 }
 
 
 void SimpleForward::UpdateForwardTableFinal() {
-  if (forward_.size() == 0) {
-    forward_.push_back(unordered_map<Label, double>());
-    return;
-  }
-  const unordered_map<Label, double>& prev_fwd = forward_.back();
-  forward_.push_back(unordered_map<Label, double>());
-  for (unordered_map<StateId, unordered_set<Label> >::const_iterator st_it =
-           accessible_from_.begin(); st_it != accessible_from_.end(); ++st_it) {
-    const StateId state = st_it->first;
-    const fst::StdArc::Weight final_state_cost = fst_.Final(state);
-    if (final_state_cost != fst::StdArc::Weight::Zero()) {
-      for (unordered_set<Label>::const_iterator la_it = st_it->second.begin();
-           la_it != st_it->second.end(); ++la_it) {
-        const Label label = *la_it;
-        const double final_label_cost =
-            final_state_cost.Value() + prev_fwd.find(label)->second;
-        unordered_map<Label, double>::iterator find_iter =
-            forward_.back().find(label);
-        if (find_iter == forward_.back().end()) {
-          forward_.back()[label] = final_label_cost;
-        } else {
-          find_iter->second = COST_ADD(find_iter->second, final_label_cost);
-        }
-      }
+  forward_.push_back(LabelMap());
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    const double final_cost = fst_.Final(tok->first).Value();
+    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
+         ti != tok->second.ilabels.end(); ++ti) {
+      LabelMap::iterator fi = forward_.back().insert(
+              make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
+      fi->second = -kaldi::LogAdd(-fi->second, -(ti->second + final_cost));
     }
   }
 }
 
 
 // static
-void SimpleForward::PruneToks(BaseFloat beam, unordered_map<StateId, double> *toks) {
+void SimpleForward::PruneToks(BaseFloat beam, TokenMap *toks) {
   if (toks->empty()) {
     KALDI_VLOG(2) <<  "No tokens to prune.\n";
     return;
   }
-  double best_cost = COST_MAX;
-  for (unordered_map<StateId, double>::iterator iter = toks->begin();
-       iter != toks->end(); ++iter)
-    best_cost = std::min(best_cost, iter->second);
-  std::vector<StateId> removed;
+  TokenMap::const_iterator tok = toks->begin();
+  // Get best cost
+  double best_cost = tok->second.cost;
+  for (++tok; tok != toks->end(); ++tok) {
+    best_cost = std::min(best_cost, tok->second.cost);
+  }
+  // Mark all tokens with cost greater than the cutoff
+  std::vector<TokenMap::const_iterator> remove_toks;
   const double cutoff = best_cost + beam;
-  for (unordered_map<StateId, double>::const_iterator iter = toks->begin();
-       iter != toks->end(); ++iter) {
-    if (iter->second <= cutoff) continue;
-    removed.push_back(iter->first);
+  for (tok = toks->begin(); tok != toks->end(); ++tok) {
+    if (tok->second.cost > cutoff) remove_toks.push_back(tok);
   }
-  for (size_t i = 0; i < removed.size(); ++i) {
-    toks->erase(removed[i]);
+  // Prune tokens
+  for (size_t i = 0; i < remove_toks.size(); ++i) {
+    toks->erase(remove_toks[i]);
   }
-  KALDI_VLOG(2) <<  "Pruned " << removed.size() << " to " << toks->size() << " toks.\n";
+  KALDI_VLOG(2) <<  "Pruned " << remove_toks.size() << " to "
+                << toks->size() << " toks.\n";
 }
 
 } // end namespace kaldi.

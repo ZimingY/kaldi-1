@@ -86,15 +86,17 @@ void ForwardSingleStateNoEpsUnitTest() {
     kaldi::AssertEqual(forward.FinalCost(), -log(0.25), 1E-9);
 
     // Check forward table
-    KALDI_ASSERT(forward.GetTable().size() == 1);
+    KALDI_ASSERT(forward.GetTable().size() == 2);
     // frame = 0
-    KALDI_ASSERT(forward.GetTable()[0].count(1) == 1);
-    KALDI_ASSERT(forward.GetTable()[0].count(2) == 1);
+    KALDI_ASSERT(forward.GetTable()[0].count(1));
+    KALDI_ASSERT(forward.GetTable()[0].count(2));
     kaldi::AssertEqual(forward.GetTable()[0].find(1)->second, -log(0.3), 1E-9);
     kaldi::AssertEqual(forward.GetTable()[0].find(2)->second, -log(0.2), 1E-9);
     // end
-    //KALDI_ASSERT(forward.GetTable()[1].count(1) == 1);
-    //KALDI_ASSERT(forward.GetTable()[1].count(2) == 2);
+    KALDI_ASSERT(forward.GetTable()[1].count(1));
+    KALDI_ASSERT(forward.GetTable()[1].count(2));
+    kaldi::AssertEqual(forward.GetTable()[1].find(1)->second, -log(0.15), 1E-9);
+    kaldi::AssertEqual(forward.GetTable()[1].find(2)->second, -log(0.1), 1E-9);
   }
 
   {
@@ -122,25 +124,33 @@ void ForwardSingleStateNoEpsUnitTest() {
     kaldi::AssertEqual(forward.FinalCost(), -log(0.0625), 1E-9);
 
     // Check forward table
-    KALDI_ASSERT(forward.GetTable().size() == 3);
+    KALDI_ASSERT(forward.GetTable().size() == 4);
     // frame = 0
-    KALDI_ASSERT(forward.GetTable()[0].count(1) == 1);
-    KALDI_ASSERT(forward.GetTable()[0].count(2) == 1);
+    KALDI_ASSERT(forward.GetTable()[0].count(1));
+    KALDI_ASSERT(forward.GetTable()[0].count(2));
     kaldi::AssertEqual(forward.GetTable()[0].find(1)->second, -log(0.05), 1E-9);
     kaldi::AssertEqual(forward.GetTable()[0].find(2)->second, -log(0.45), 1E-9);
     // frame = 1
-    KALDI_ASSERT(forward.GetTable()[1].count(1) == 1);
-    KALDI_ASSERT(forward.GetTable()[1].count(2) == 1);
-    kaldi::AssertEqual(forward.GetTable()[1].find(1)->second, -log(0.125), 1E-9);
-    kaldi::AssertEqual(forward.GetTable()[1].find(2)->second, -log(0.125), 1E-9);
+    KALDI_ASSERT(forward.GetTable()[1].count(1));
+    KALDI_ASSERT(forward.GetTable()[1].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(1)->second, -log(0.125), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(2)->second, -log(0.125), 1E-9);
     // frame = 2
-    KALDI_ASSERT(forward.GetTable()[2].count(1) == 1);
-    KALDI_ASSERT(forward.GetTable()[2].count(2) == 1);
-    kaldi::AssertEqual(forward.GetTable()[2].find(1)->second, -log(0.050), 1E-9);
-    kaldi::AssertEqual(forward.GetTable()[2].find(2)->second, -log(0.075), 1E-9);
+    KALDI_ASSERT(forward.GetTable()[2].count(1));
+    KALDI_ASSERT(forward.GetTable()[2].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[2].find(1)->second, -log(0.050), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[2].find(2)->second, -log(0.075), 1E-9);
     // end
-    //KALDI_ASSERT(forward.GetTable()[3].count(1) == 1);
-    //KALDI_ASSERT(forward.GetTable()[3].count(2) == 1);
+    KALDI_ASSERT(forward.GetTable()[3].count(1));
+    KALDI_ASSERT(forward.GetTable()[3].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[3].find(1)->second, -log(0.0250), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[3].find(2)->second, -log(0.0375), 1E-9);
   }
 }
 
@@ -156,7 +166,7 @@ void ForwardEpsilonTransitionUnitTest() {
 
   fst.SetStart(0);
   fst.SetFinal(0, 0.0);
-  fst.SetFinal(1, 0.0);
+  fst.SetFinal(1, -log(0.5));
 
   DummyDecodable decodable;
   SimpleForward forward(fst, 1E+30, 1E-9);
@@ -171,12 +181,24 @@ void ForwardEpsilonTransitionUnitTest() {
     // Check simple decode
     KALDI_ASSERT(forward.Decode(&decodable));
     KALDI_ASSERT(forward.ReachedFinal());
-    kaldi::AssertEqual(forward.FinalCost(), -log(0.39), 1E-9);
+    kaldi::AssertEqual(forward.FinalCost(), -log(0.3), 1E-9);
 
     // Check forward table
-    KALDI_ASSERT(forward.GetTable().size() == 1);
-    KALDI_ASSERT(forward.GetTable()[0].count(1) == 1);
-    KALDI_ASSERT(forward.GetTable()[0].count(2) == 1);
+    KALDI_ASSERT(forward.GetTable().size() == 2);
+    // frame = 0
+    KALDI_ASSERT(forward.GetTable()[0].count(1));
+    KALDI_ASSERT(forward.GetTable()[0].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[0].find(1)->second, -log(0.315), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[0].find(2)->second, -log(0.075), 1E-9);
+    // end
+    KALDI_ASSERT(forward.GetTable()[1].count(1));
+    KALDI_ASSERT(forward.GetTable()[1].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(1)->second, -log(0.2625), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(2)->second, -log(0.0375), 1E-9);
   }
 
   // Two observations
@@ -193,7 +215,31 @@ void ForwardEpsilonTransitionUnitTest() {
     // Check simple decode
     KALDI_ASSERT(forward.Decode(&decodable));
     KALDI_ASSERT(forward.ReachedFinal());
-    kaldi::AssertEqual(forward.FinalCost(), -log(0.0908), 1E-9);
+    kaldi::AssertEqual(forward.FinalCost(), -log(0.0535), 1E-9);
+
+    // Check forward table
+    KALDI_ASSERT(forward.GetTable().size() == 3);
+    // frame = 0
+    KALDI_ASSERT(forward.GetTable()[0].count(1));
+    KALDI_ASSERT(forward.GetTable()[0].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[0].find(1)->second, -log(0.27), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[0].find(2)->second, -log(0.1), 1E-9);
+    // frame = 1
+    KALDI_ASSERT(forward.GetTable()[1].count(1));
+    KALDI_ASSERT(forward.GetTable()[1].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(1)->second, -log(0.0243), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[1].find(2)->second, -log(0.0665), 1E-9);
+    // end
+    KALDI_ASSERT(forward.GetTable()[2].count(1));
+    KALDI_ASSERT(forward.GetTable()[2].count(2));
+    kaldi::AssertEqual(
+        forward.GetTable()[2].find(1)->second, -log(0.02025), 1E-9);
+    kaldi::AssertEqual(
+        forward.GetTable()[2].find(2)->second, -log(0.03325), 1E-9);
   }
 }
 

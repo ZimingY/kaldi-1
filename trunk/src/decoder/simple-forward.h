@@ -30,9 +30,10 @@ namespace kaldi {
 
 class SimpleForward {
  public:
-  typedef fst::StdArc::Label Label;
-  typedef fst::StdArc::StateId StateId;
-  typedef fst::Fst<fst::StdArc> Fst;
+  typedef fst::StdArc StdArc;
+  typedef StdArc::Label Label;
+  typedef StdArc::StateId StateId;
+  typedef fst::Fst<StdArc> Fst;
 
   SimpleForward(const Fst &fst, BaseFloat beam, BaseFloat loop_epsilon) :
       fst_(fst), beam_(beam), loop_epsilon_(loop_epsilon) { }
@@ -87,18 +88,52 @@ class SimpleForward {
   // Add a new row to the table, with the cost of each label (i.e.
   // transition-id) reaching the end of the input.
   void UpdateForwardTableFinal();
+  void UpdateForwardTable();
 
-  std::vector<unordered_map<Label, double> > forward_;
-  unordered_map<StateId, unordered_set<Label> > accessible_from_;
-  unordered_map<StateId, double> curr_toks_;
-  unordered_map<StateId, double> prev_toks_;
+  typedef unordered_map<Label, double>  LabelMap;
+  std::vector<LabelMap> forward_;
+
+  struct Token {
+    double cost; // total cost of the token
+    LabelMap ilabels; // cost split for each input label
+
+    Token(double c) : cost(c) { }
+
+    // Update token with a path coming from `parent' through the given arc
+    // and with the given acoustic cost.
+    void Update(const Token& parent, const StdArc& arc, double acoustic) {
+      const double inc_cost = parent.cost + arc.weight.Value() + acoustic;
+      cost = -kaldi::LogAdd(-cost, -inc_cost);
+      LabelMap::iterator lab = ilabels.insert(
+          make_pair(arc.ilabel, -kaldi::kLogZeroDouble)).first;
+      lab->second = -kaldi::LogAdd(-lab->second, -inc_cost);
+    }
+
+    // Update a token with a path coming from `parent' through an epsilon
+    // arc with the given cost.
+    void Update(const Token& parent, double epsilon_cost) {
+      const double inc_cost = parent.cost + epsilon_cost;
+      cost = -kaldi::LogAdd(-cost, -inc_cost);
+      for (unordered_map<Label, double>::const_iterator pi =
+               parent.ilabels.begin(); pi != parent.ilabels.end(); ++pi) {
+        const double inc_lab_cost = pi->second + epsilon_cost;
+        LabelMap::iterator lab = ilabels.insert(
+            make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
+        lab->second = -kaldi::LogAdd(-lab->second, -inc_lab_cost);
+      }
+    }
+  };
+
+  typedef unordered_map<StateId, Token> TokenMap;
+  TokenMap curr_toks_;
+  TokenMap prev_toks_;
   const Fst &fst_;
   BaseFloat beam_;
   BaseFloat loop_epsilon_;
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
 
-  static void PruneToks(BaseFloat beam, unordered_map<StateId, double> *toks);
+  static void PruneToks(BaseFloat beam, TokenMap *toks);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleForward);
 };
