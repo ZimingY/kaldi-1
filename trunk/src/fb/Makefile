@@ -3,13 +3,11 @@ all:
 EXTRA_CXXFLAGS = -Wno-sign-compare -O3
 include ../kaldi.mk
 
-TESTFILES =
+TESTFILES = simple-forward-test simple-backward-test
 
-OBJFILES = training-graph-compiler.o lattice-simple-decoder.o lattice-faster-decoder.o \
-   lattice-faster-online-decoder.o simple-decoder.o faster-decoder.o \
-   lattice-tracking-decoder.o decoder-wrappers.o
+OBJFILES = simple-forward.o simple-backward.o
 
-LIBNAME = kaldi-decoder
+LIBNAME = kaldi-fb
 
 ADDLIBS = ../transform/kaldi-transform.a ../tree/kaldi-tree.a ../lat/kaldi-lat.a \
      ../sgmm/kaldi-sgmm.a ../gmm/kaldi-gmm.a ../hmm/kaldi-hmm.a ../util/kaldi-util.a \

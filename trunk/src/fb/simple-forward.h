@@ -1,4 +1,4 @@
-// decoder/simple-forward.h
+// fb/simple-forward.h
 
 // Copyright 2015  Joan Puigcerver
 
@@ -17,8 +17,8 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef KALDI_DECODER_SIMPLE_FORWARD_H_
-#define KALDI_DECODER_SIMPLE_FORWARD_H_
+#ifndef KALDI_FB_SIMPLE_FORWARD_H_
+#define KALDI_FB_SIMPLE_FORWARD_H_
 
 
 #include "util/stl-utils.h"
@@ -34,6 +34,7 @@ class SimpleForward {
   typedef StdArc::Label Label;
   typedef StdArc::StateId StateId;
   typedef fst::Fst<StdArc> Fst;
+  typedef fst::ArcIterator<Fst> ArcIterator;
 
   SimpleForward(const Fst &fst, BaseFloat beam, BaseFloat loop_epsilon) :
       fst_(fst), beam_(beam), loop_epsilon_(loop_epsilon) { }
@@ -44,9 +45,7 @@ class SimpleForward {
   /// Returns true if any tokens reached the end of the file (regardless of
   /// whether they are in a final state); query ReachedFinal() after Decode()
   /// to see whether we reached a final state.
-  bool Decode(DecodableInterface *decodable);
-
-  bool ReachedFinal() const;
+  bool Forward(DecodableInterface *decodable);
 
   /// *** The next functions are from the "new interface". ***
 
@@ -54,19 +53,15 @@ class SimpleForward {
   /// more information.  It returns the total cost of reaching all final
   /// states. This is useful to obtain the total likelihood of the complete
   /// decoding input. It will usually be nonnegative.
-  double FinalCost() const;
+  double TotalCost() const;
 
-  /// InitDecoding initializes the decoding, and should only be used if you
-  /// intend to call AdvanceDecoding().  If you call Decode(), you don't need
-  /// to call this.  You can call InitDecoding if you have already decoded an
-  /// utterance and want to start with a new utterance.
-  void InitDecoding();
+  void InitForward();
 
   /// This will decode until there are no more frames ready in the decodable
   /// object, but if max_num_frames is >= 0 it will decode no more than
   /// that many frames.
-  void AdvanceDecoding(DecodableInterface *decodable,
-                       int32 max_num_frames = -1);
+  void AdvanceForward(DecodableInterface *decodable,
+                      int32 max_num_frames = -1);
 
   /// Returns the number of frames already decoded.
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
@@ -95,32 +90,40 @@ class SimpleForward {
 
   struct Token {
     double cost; // total cost of the token
+    double last_cost;    // shortest-distance algorithm
     LabelMap ilabels; // cost split for each input label
+    LabelMap last_ilabels;
 
-    Token(double c) : cost(c) { }
+    Token(double c) : cost(c), last_cost(-kaldi::kLogZeroDouble) { }
 
-    // Update token with a path coming from `parent' through the given arc
-    // and with the given acoustic cost.
-    void Update(const Token& parent, const StdArc& arc, double acoustic) {
-      const double inc_cost = parent.cost + arc.weight.Value() + acoustic;
-      cost = -kaldi::LogAdd(-cost, -inc_cost);
-      LabelMap::iterator lab = ilabels.insert(
-          make_pair(arc.ilabel, -kaldi::kLogZeroDouble)).first;
-      lab->second = -kaldi::LogAdd(-lab->second, -inc_cost);
-    }
+    bool Update(const Token& parent, Label label, const double inc_cost,
+                double threshold) {
+      const double new_cost = -kaldi::LogAdd(-cost, -inc_cost);
+      if (kaldi::ApproxEqual(cost, new_cost, threshold))
+        return false;
+      cost = new_cost;
+      last_cost = -kaldi::LogAdd(-last_cost, -inc_cost);
 
-    // Update a token with a path coming from `parent' through an epsilon
-    // arc with the given cost.
-    void Update(const Token& parent, double epsilon_cost) {
-      const double inc_cost = parent.cost + epsilon_cost;
-      cost = -kaldi::LogAdd(-cost, -inc_cost);
-      for (unordered_map<Label, double>::const_iterator pi =
-               parent.ilabels.begin(); pi != parent.ilabels.end(); ++pi) {
-        const double inc_lab_cost = pi->second + epsilon_cost;
-        LabelMap::iterator lab = ilabels.insert(
-            make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
-        lab->second = -kaldi::LogAdd(-lab->second, -inc_lab_cost);
+      // Update weights comming from each input label
+      if (label == 0) {
+        for (unordered_map<Label, double>::const_iterator pi =
+                 parent.last_ilabels.begin();
+             pi != parent.last_ilabels.end(); ++pi) {
+          // Total weight
+          LabelMap::iterator l = ilabels.insert(
+              make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
+          l->second = -kaldi::LogAdd(-l->second, -inc_cost);
+          // Weight increment since last extraction
+          l = last_ilabels.insert(
+              make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
+          l->second = -kaldi::LogAdd(-l->second, -inc_cost);
+        }
+      } else {
+        LabelMap::iterator l = ilabels.insert(
+            make_pair(label, -kaldi::kLogZeroDouble)).first;
+        l->second = -kaldi::LogAdd(-l->second, -inc_cost);
       }
+      return true;
     }
   };
 

@@ -1,4 +1,4 @@
-// decoder/simple-forward.cc
+// fb/simple-forward.cc
 
 // Copyright 2015 Joan Puigcerver
 
@@ -17,7 +17,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include "decoder/simple-forward.h"
+#include "fb/simple-forward.h"
 #include <algorithm>
 
 namespace kaldi {
@@ -28,8 +28,14 @@ SimpleForward::~SimpleForward() {
 }
 
 
-bool SimpleForward::Decode(DecodableInterface *decodable) {
-  InitDecoding();
+bool SimpleForward::Forward(DecodableInterface *decodable) {
+  InitForward();
+
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    KALDI_LOG << "F[0, " << tok->first << "] = " << tok->second.cost;
+  }
+
   while(!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     prev_toks_.clear();
     curr_toks_.swap(prev_toks_);
@@ -37,13 +43,17 @@ bool SimpleForward::Decode(DecodableInterface *decodable) {
     ProcessNonemitting();
     PruneToks(beam_, &curr_toks_);
     UpdateForwardTable();
+    for (TokenMap::const_iterator tok = curr_toks_.begin();
+         tok != curr_toks_.end(); ++tok) {
+      KALDI_LOG << "F[" << num_frames_decoded_ << ", " << tok->first << "] = " << tok->second.cost;
+    }
   }
-  UpdateForwardTableFinal();
+  //UpdateForwardTableFinal();
   return (!curr_toks_.empty());
 }
 
 
-void SimpleForward::InitDecoding() {
+void SimpleForward::InitForward() {
   // clean up from last time:
   curr_toks_.clear();
   prev_toks_.clear();
@@ -51,15 +61,15 @@ void SimpleForward::InitDecoding() {
   // initialize decoding:
   StateId start_state = fst_.Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
-  curr_toks_[start_state] = Token();
+  curr_toks_.insert(make_pair(start_state, 0.0));
   num_frames_decoded_ = 0;
   ProcessNonemitting();
 }
 
-void SimpleForward::AdvanceDecoding(DecodableInterface *decodable,
-                                    int32 max_num_frames) {
+void SimpleForward::AdvanceForward(DecodableInterface *decodable,
+                                  int32 max_num_frames) {
   KALDI_ASSERT(num_frames_decoded_ >= 0 &&
-               "You must call InitDecoding() before AdvanceDecoding()");
+               "You must call InitForward() before AdvanceForward()");
   int32 num_frames_ready = decodable->NumFramesReady();
   // num_frames_ready must be >= num_frames_decoded, or else
   // the number of frames ready must have decreased (which doesn't
@@ -79,22 +89,10 @@ void SimpleForward::AdvanceDecoding(DecodableInterface *decodable,
     PruneToks(beam_, &curr_toks_);
     UpdateForwardTable();
   }
-  UpdateForwardTableFinal();
+  //UpdateForwardTableFinal();
 }
 
-
-bool SimpleForward::ReachedFinal() const {
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
-       tok != curr_toks_.end(); ++tok) {
-    if (tok->second.cost != -kaldi::kLogZeroDouble &&
-        fst_.Final(tok->first) != fst::StdArc::Weight::Zero())
-      return true;
-  }
-  return false;
-}
-
-
-double SimpleForward::FinalCost() const {
+double SimpleForward::TotalCost() const {
   if (curr_toks_.empty()) {
     return -kaldi::kLogZeroDouble;
   }
@@ -120,57 +118,81 @@ void SimpleForward::ProcessEmitting(DecodableInterface *decodable) {
   for (TokenMap::const_iterator ptok = prev_toks_.begin();
        ptok != prev_toks_.end(); ++ptok) {
     const StateId state = ptok->first;
-    for (fst::ArcIterator<Fst> aiter(fst_, state); !aiter.Done();
+    for (ArcIterator aiter(fst_, state); !aiter.Done();
          aiter.Next()) {
-      const fst::StdArc& arc = aiter.Value();
+      const StdArc& arc = aiter.Value();
       if (arc.ilabel != 0) {  // propagate emitting only...
         const double acoustic_cost =
             -decodable->LogLikelihood(frame, arc.ilabel);
-        TokenMap::iterator ctok = curr_toks_.insert(
-            make_pair(arc.nextstate, Token(-kaldi::kLogZeroDouble))).first;
-        ctok->second.Update(ptok->second, arc, acoustic_cost);
+        Token& ctok = curr_toks_.insert(make_pair(
+            arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
+        ctok.Update(
+            ptok->second, arc.ilabel,
+            ptok->second.cost + arc.weight.Value() + acoustic_cost,
+            loop_epsilon_);
       }
     }
   }
   num_frames_decoded_++;
 }
 
+template <typename T>
+class QueueSet {
+ private:
+  std::queue<T> queue_;
+  std::set<T> set_;
+
+ public:
+  bool empty() const {
+    return queue_.empty();
+  }
+  size_t size() const {
+    return queue_.size();
+  }
+  void push(const T& n) {
+    if (set_.insert(n).second)
+      queue_.push(n);
+  }
+  const T& front() const {
+    return queue_.front();
+  }
+  T& front() {
+    return queue_.front();
+  }
+  void pop() {
+    set_.erase(queue_.front());
+    queue_.pop();
+  }
+};
+
 void SimpleForward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
   // curr_toks_.
-  std::vector<StateId> queue_;
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
+  QueueSet<StateId> queue_set;
+  for (TokenMap::iterator tok = curr_toks_.begin();
        tok != curr_toks_.end(); ++tok) {
-    queue_.push_back(tok->first);
+    queue_set.push(tok->first);
+    tok->second.last_cost = tok->second.cost;
+    tok->second.last_ilabels = tok->second.ilabels;
   }
 
-  while (!queue_.empty()) {
-    const StateId state = queue_.back();
-    TokenMap::const_iterator ptok = curr_toks_.find(state);
-#ifdef KALDI_PARANOID
-    KALDI_ASSERT(ptok != curr_toks_.end());
-#endif
-    queue_.pop_back();
-    for (fst::ArcIterator<Fst> aiter(fst_, state); !aiter.Done();
+  while (!queue_set.empty()) {
+    const StateId q = queue_set.front();
+    queue_set.pop();
+
+    Token& ptok = curr_toks_.find(q)->second;
+    const double r_q = ptok.last_cost;
+    ptok.last_cost = -kaldi::kLogZeroDouble;
+
+    for (ArcIterator aiter(fst_, q); !aiter.Done();
          aiter.Next()) {
-      const fst::StdArc& arc = aiter.Value();
-      if (arc.ilabel == 0) {  // propagate nonemitting only...
-        TokenMap::iterator ctok = curr_toks_.insert(
-            make_pair(arc.nextstate, Token(-kaldi::kLogZeroDouble))).first;
-        const double old_cost_to_ctok = ctok->second.cost;
-        ctok->second.Update(ptok->second, arc.weight.Value());
-        // TODO(jpuigcerver): This tries to prevent the algorithm to hang
-        // with epsilon-loops. This should be able to detect convergence
-        // in the cost of the state, however it will still hang if the
-        // cost is divergent. Anyway, this solution will be slow in the
-        // case of an WFST with epsilon-cycles. Viterbi algorithm does not
-        // have this problem, as long as the cost of the epsilon-cycle is
-        // positive. Otherwise, the current implementation of the Decoder
-        // will hang as well.
-        if (!kaldi::ApproxEqual(
-                ctok->second.cost, old_cost_to_ctok, loop_epsilon_)) {
-          queue_.push_back(arc.nextstate);
-        }
+      const StdArc& arc = aiter.Value();
+      if (arc.ilabel != 0) continue;
+      Token& ctok = curr_toks_.insert(make_pair(
+          arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
+      if (ctok.Update(ptok, arc.ilabel, r_q + arc.weight.Value(),
+                      loop_epsilon_)) {
+        queue_set.push(arc.nextstate);
       }
     }
   }
