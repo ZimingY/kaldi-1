@@ -20,11 +20,11 @@
 #ifndef KALDI_FB_SIMPLE_FORWARD_H_
 #define KALDI_FB_SIMPLE_FORWARD_H_
 
-
-#include "util/stl-utils.h"
 #include "fst/fstlib.h"
-#include "lat/kaldi-lattice.h"
+#include "hmm/posterior.h"
 #include "itf/decodable-itf.h"
+#include "lat/kaldi-lattice.h"
+#include "util/stl-utils.h"
 
 namespace kaldi {
 
@@ -49,9 +49,8 @@ class SimpleForward {
 
   /// *** The next functions are from the "new interface". ***
 
-  /// FinalCost() serves the same function as ReachedFinal(), but gives
-  /// more information.  It returns the total cost of reaching all final
-  /// states. This is useful to obtain the total likelihood of the complete
+  /// TotalCost() returns the total cost of reaching any of the final states.
+  /// This is useful to obtain the total likelihood of the complete
   /// decoding input. It will usually be nonnegative.
   double TotalCost() const;
 
@@ -72,59 +71,40 @@ class SimpleForward {
     return forward_;
   }
 
+  void FillPosterior(Posterior* posterior) const;
+
  private:
 
   // ProcessEmitting decodes the frame num_frames_decoded_ of the
   // decodable object, then increments num_frames_decoded_.
   void ProcessEmitting(DecodableInterface *decodable);
-
   void ProcessNonemitting();
 
   // Add a new row to the table, with the cost of each label (i.e.
   // transition-id) reaching the end of the input.
-  void UpdateForwardTableFinal();
   void UpdateForwardTable();
 
   typedef unordered_map<Label, double>  LabelMap;
   std::vector<LabelMap> forward_;
 
   struct Token {
-    double cost; // total cost of the token
-    double last_cost;    // shortest-distance algorithm
-    LabelMap ilabels; // cost split for each input label
-    LabelMap last_ilabels;
+    double cost;            // total cost to the state
+    double last_cost;       // cost to the state, since the last extraction from
+                            // the shortest-distance algorithm queue (see [1]).
+    LabelMap ilabels;       // total cost to the state, for each input symbol.
+    LabelMap last_ilabels;  //  cost to the state, for each input symbol,
+                            // since the last extraction from the
+                            // shortest-distance algorithm queue (see [1]).
 
     Token(double c) : cost(c), last_cost(-kaldi::kLogZeroDouble) { }
 
-    bool Update(const Token& parent, Label label, const double inc_cost,
-                double threshold) {
-      const double new_cost = -kaldi::LogAdd(-cost, -inc_cost);
-      if (kaldi::ApproxEqual(cost, new_cost, threshold))
-        return false;
-      cost = new_cost;
-      last_cost = -kaldi::LogAdd(-last_cost, -inc_cost);
+    void UpdateEmitting(
+        const Label label, const double prev_cost, const double edge_cost,
+        const double acoustic_cost);
 
-      // Update weights comming from each input label
-      if (label == 0) {
-        for (unordered_map<Label, double>::const_iterator pi =
-                 parent.last_ilabels.begin();
-             pi != parent.last_ilabels.end(); ++pi) {
-          // Total weight
-          LabelMap::iterator l = ilabels.insert(
-              make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
-          l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-          // Weight increment since last extraction
-          l = last_ilabels.insert(
-              make_pair(pi->first, -kaldi::kLogZeroDouble)).first;
-          l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-        }
-      } else {
-        LabelMap::iterator l = ilabels.insert(
-            make_pair(label, -kaldi::kLogZeroDouble)).first;
-        l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-      }
-      return true;
-    }
+    bool UpdateNonEmitting(
+        const LabelMap& parent_ilabels, const double prev_cost,
+        const double edge_cost, const double threshold);
   };
 
   typedef unordered_map<StateId, Token> TokenMap;

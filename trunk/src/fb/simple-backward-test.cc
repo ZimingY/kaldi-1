@@ -1,4 +1,5 @@
 #include "fb/simple-backward.h"
+#include "fb/test-utils.h"
 #include "util/kaldi-io.h"
 
 using fst::VectorFst;
@@ -7,39 +8,6 @@ typedef fst::StdArc::Label Label;
 
 namespace kaldi {
 namespace unittest {
-
-class DummyDecodable : public DecodableInterface {
- private:
-  int32 num_states_;
-  int32 num_frames_;
-  vector<BaseFloat> observations_;
-
- public:
-  DummyDecodable() : DecodableInterface(), num_states_(0), num_frames_(-1) { }
-
-  void Init(int32 num_states, int32 num_frames,
-            const vector<BaseFloat>& observations) {
-    KALDI_ASSERT(observations.size() == num_states * num_frames);
-    num_states_ = num_states;
-    num_frames_ = num_frames;
-    observations_ = observations;
-  }
-
-  virtual BaseFloat LogLikelihood(int32 frame, int32 state_index) {
-    KALDI_ASSERT(frame >= 0 && frame < NumFramesReady());
-    KALDI_ASSERT(state_index > 0 && state_index <= NumIndices());
-    return observations_[frame * num_states_ + state_index - 1];
-  }
-
-  virtual int32 NumFramesReady() const { return num_frames_; }
-
-  virtual int32 NumIndices() const { return num_states_; }
-
-  virtual bool IsLastFrame(int32 frame) const {
-    KALDI_ASSERT(frame < NumFramesReady());
-    return (frame == NumFramesReady() - 1);
-  }
-};
 
 void PrintBackwardTable(const SimpleBackward& backward) {
   typedef unordered_map<Label, double> label_weight_map;

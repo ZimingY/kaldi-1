@@ -18,6 +18,7 @@
 // limitations under the License.
 
 #include "fb/simple-forward.h"
+#include "fb/queue-set.h"
 #include <algorithm>
 
 namespace kaldi {
@@ -25,31 +26,6 @@ namespace kaldi {
 SimpleForward::~SimpleForward() {
   curr_toks_.clear();
   prev_toks_.clear();
-}
-
-
-bool SimpleForward::Forward(DecodableInterface *decodable) {
-  InitForward();
-
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
-       tok != curr_toks_.end(); ++tok) {
-    KALDI_LOG << "F[0, " << tok->first << "] = " << tok->second.cost;
-  }
-
-  while(!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
-    prev_toks_.clear();
-    curr_toks_.swap(prev_toks_);
-    ProcessEmitting(decodable);
-    ProcessNonemitting();
-    PruneToks(beam_, &curr_toks_);
-    UpdateForwardTable();
-    for (TokenMap::const_iterator tok = curr_toks_.begin();
-         tok != curr_toks_.end(); ++tok) {
-      KALDI_LOG << "F[" << num_frames_decoded_ << ", " << tok->first << "] = " << tok->second.cost;
-    }
-  }
-  //UpdateForwardTableFinal();
-  return (!curr_toks_.empty());
 }
 
 
@@ -65,6 +41,21 @@ void SimpleForward::InitForward() {
   num_frames_decoded_ = 0;
   ProcessNonemitting();
 }
+
+
+bool SimpleForward::Forward(DecodableInterface *decodable) {
+  InitForward();
+  while(!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
+    prev_toks_.clear();
+    curr_toks_.swap(prev_toks_);
+    ProcessEmitting(decodable);
+    ProcessNonemitting();
+    PruneToks(beam_, &curr_toks_);
+    UpdateForwardTable();
+  }
+  return (!curr_toks_.empty());
+}
+
 
 void SimpleForward::AdvanceForward(DecodableInterface *decodable,
                                   int32 max_num_frames) {
@@ -89,25 +80,6 @@ void SimpleForward::AdvanceForward(DecodableInterface *decodable,
     PruneToks(beam_, &curr_toks_);
     UpdateForwardTable();
   }
-  //UpdateForwardTableFinal();
-}
-
-double SimpleForward::TotalCost() const {
-  if (curr_toks_.empty()) {
-    return -kaldi::kLogZeroDouble;
-  }
-  TokenMap::const_iterator tok = curr_toks_.begin();
-  double total_cost = tok->second.cost + fst_.Final(tok->first).Value();
-  for (++tok; tok != curr_toks_.end(); ++tok) {
-    total_cost = -kaldi::LogAdd(
-        -total_cost, -(tok->second.cost + fst_.Final(tok->first).Value()));
-  }
-  if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
-                                  // some kind of error, most likely.
-    KALDI_WARN << "Found NaN (likely failure in decoding)";
-    return -kaldi::kLogZeroDouble;
-  }
-  return total_cost;
 }
 
 
@@ -126,44 +98,14 @@ void SimpleForward::ProcessEmitting(DecodableInterface *decodable) {
             -decodable->LogLikelihood(frame, arc.ilabel);
         Token& ctok = curr_toks_.insert(make_pair(
             arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
-        ctok.Update(
-            ptok->second, arc.ilabel,
-            ptok->second.cost + arc.weight.Value() + acoustic_cost,
-            loop_epsilon_);
+        ctok.UpdateEmitting(
+            arc.ilabel, ptok->second.cost, arc.weight.Value(), acoustic_cost);
       }
     }
   }
   num_frames_decoded_++;
 }
 
-template <typename T>
-class QueueSet {
- private:
-  std::queue<T> queue_;
-  std::set<T> set_;
-
- public:
-  bool empty() const {
-    return queue_.empty();
-  }
-  size_t size() const {
-    return queue_.size();
-  }
-  void push(const T& n) {
-    if (set_.insert(n).second)
-      queue_.push(n);
-  }
-  const T& front() const {
-    return queue_.front();
-  }
-  T& front() {
-    return queue_.front();
-  }
-  void pop() {
-    set_.erase(queue_.front());
-    queue_.pop();
-  }
-};
 
 void SimpleForward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
@@ -177,52 +119,25 @@ void SimpleForward::ProcessNonemitting() {
   }
 
   while (!queue_set.empty()) {
-    const StateId q = queue_set.front();
+    const StateId state = queue_set.front();
     queue_set.pop();
 
-    Token& ptok = curr_toks_.find(q)->second;
-    const double r_q = ptok.last_cost;
+    Token& ptok = curr_toks_.find(state)->second;
+    const double last_cost = ptok.last_cost;
+    const LabelMap last_cost_labels = ptok.last_ilabels;
     ptok.last_cost = -kaldi::kLogZeroDouble;
+    ptok.last_ilabels.clear();
 
-    for (ArcIterator aiter(fst_, q); !aiter.Done();
+    for (ArcIterator aiter(fst_, state); !aiter.Done();
          aiter.Next()) {
       const StdArc& arc = aiter.Value();
       if (arc.ilabel != 0) continue;
       Token& ctok = curr_toks_.insert(make_pair(
           arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
-      if (ctok.Update(ptok, arc.ilabel, r_q + arc.weight.Value(),
-                      loop_epsilon_)) {
+      if (ctok.UpdateNonEmitting(last_cost_labels, last_cost,
+                                 arc.weight.Value(), loop_epsilon_)) {
         queue_set.push(arc.nextstate);
       }
-    }
-  }
-}
-
-
-void SimpleForward::UpdateForwardTable() {
-  forward_.push_back(unordered_map<Label, double>());
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
-       tok != curr_toks_.end(); ++tok) {
-    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
-         ti != tok->second.ilabels.end(); ++ti) {
-      LabelMap::iterator fi = forward_.back().insert(
-          make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
-      fi->second = -kaldi::LogAdd(-fi->second, -ti->second);
-    }
-  }
-}
-
-
-void SimpleForward::UpdateForwardTableFinal() {
-  forward_.push_back(LabelMap());
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
-       tok != curr_toks_.end(); ++tok) {
-    const double final_cost = fst_.Final(tok->first).Value();
-    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
-         ti != tok->second.ilabels.end(); ++ti) {
-      LabelMap::iterator fi = forward_.back().insert(
-              make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
-      fi->second = -kaldi::LogAdd(-fi->second, -(ti->second + final_cost));
     }
   }
 }
@@ -252,6 +167,77 @@ void SimpleForward::PruneToks(BaseFloat beam, TokenMap *toks) {
   }
   KALDI_VLOG(2) <<  "Pruned " << remove_toks.size() << " to "
                 << toks->size() << " toks.\n";
+}
+
+
+double SimpleForward::TotalCost() const {
+  double total_cost = -kaldi::kLogZeroDouble;
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    total_cost = -kaldi::LogAdd(
+        -total_cost, -(tok->second.cost + fst_.Final(tok->first).Value()));
+  }
+  if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
+                                  // some kind of error, most likely.
+    KALDI_WARN << "Found NaN (likely failure in decoding)";
+    return -kaldi::kLogZeroDouble;
+  }
+  return total_cost;
+}
+
+
+void SimpleForward::UpdateForwardTable() {
+  // Add costs of each symbol across all active states.
+  forward_.push_back(unordered_map<Label, double>());
+  for (TokenMap::const_iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
+         ti != tok->second.ilabels.end(); ++ti) {
+      LabelMap::iterator fi = forward_.back().insert(
+          make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
+      fi->second = -kaldi::LogAdd(-fi->second, -ti->second);
+    }
+  }
+}
+
+
+// Update token when processing non-epsilon edges
+void SimpleForward::Token::UpdateEmitting(
+    const Label label, const double prev_cost, const double edge_cost,
+    const double acoustic_cost) {
+  const double inc_cost = prev_cost + edge_cost + acoustic_cost;
+  // Update total cost to the state, using input symbol `label'
+  LabelMap::iterator l = ilabels.insert(make_pair(
+      label, -kaldi::kLogZeroDouble)).first;
+  l->second = -kaldi::LogAdd(-l->second, -inc_cost);
+  // Update total cost to the state
+  cost = -kaldi::LogAdd(-cost, -inc_cost);
+}
+
+
+// Update token when processing epsilon edges
+bool SimpleForward::Token::UpdateNonEmitting(
+    const LabelMap& parent_ilabels, const double prev_cost,
+    const double edge_cost, const double threshold) {
+  const double old_cost = cost;
+  // Propagate all the parent input symbols to this state, since we are
+  // using a epsilon-transition
+  for (unordered_map<Label, double>::const_iterator pl =
+           parent_ilabels.begin(); pl != parent_ilabels.end(); ++pl) {
+    const double inc_cost = pl->second + edge_cost;
+    // Total cost using symbol `pl->first' to this state
+    LabelMap::iterator l =
+        ilabels.insert(make_pair(pl->first, -kaldi::kLogZeroDouble)).first;
+    l->second = -kaldi::LogAdd(-l->second, -inc_cost);
+    // Cost since the last time this state was extracted from the search
+    // queue (see [1]).
+    l = last_ilabels.insert(make_pair(pl->first, -kaldi::kLogZeroDouble)).first;
+    l->second = -kaldi::LogAdd(-l->second, -inc_cost);
+  }
+  // Total cost to this state, using any symbol
+  cost = -kaldi::LogAdd(-cost, - (prev_cost + edge_cost));
+  last_cost = -kaldi::LogAdd(-last_cost, -(prev_cost + edge_cost));
+  return !kaldi::ApproxEqual(cost, old_cost, threshold);
 }
 
 } // end namespace kaldi.
