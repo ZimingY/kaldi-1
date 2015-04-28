@@ -18,51 +18,121 @@
 // limitations under the License.
 
 #include "fb/simple-backward.h"
+#include "fb/queue-set.h"
 #include <algorithm>
-#include <functional>
 
 namespace kaldi {
 
 SimpleBackward::~SimpleBackward() {
   curr_toks_.clear();
-  next_toks_.clear();
+  prev_toks_.clear();
 }
+
+
+void SimpleBackward::InitBackward(DecodableInterface *decodable) {
+  // clean up from last time:
+  curr_toks_.clear();
+  prev_toks_.clear();
+  backward_.clear();
+  // initialize decoding:
+  for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+    if (fst_.Final(siter.Value()) != -kaldi::kLogZeroDouble) {
+      curr_toks_.insert(make_pair(
+          siter.Value(), fst_.Final(siter.Value()).Value()));
+    }
+  }
+  // We need this asserts because the backward pass cannot be done in a
+  // sequence processed online, that is, we need the whole sequence to be
+  // available from the beginning
+  KALDI_ASSERT(decodable->NumFramesReady() >= 0);
+  KALDI_ASSERT(decodable->IsLastFrame(decodable->NumFramesReady() - 1));
+  backward_.resize(decodable->NumFramesReady());
+  num_frames_decoded_ = 0;
+  ProcessNonemitting();
+}
+
 
 bool SimpleBackward::Backward(DecodableInterface *decodable) {
   InitBackward(decodable);
-  while (remaining_frames_ > 0) {
-    next_toks_.clear();
-    curr_toks_.swap(next_toks_);
+  while(num_frames_decoded_ < decodable->NumFramesReady()) {
+    prev_toks_.clear();
+    curr_toks_.swap(prev_toks_);
     ProcessEmitting(decodable);
     ProcessNonemitting();
     PruneToks(beam_, &curr_toks_);
-    UpdateBackwardTable();
+    // Here num_frames_decoded_ has already been updated
+    AccumulateToks(curr_toks_, &backward_[decodable->NumFramesReady() -
+                                          num_frames_decoded_]);
   }
   return (!curr_toks_.empty());
 }
 
 
-void SimpleBackward::InitBackward(DecodableInterface *decodable) {
-  curr_toks_.clear();
-  next_toks_.clear();
-  backward_.clear();
+void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
+  // Processes emitting arcs for one frame.  Propagates from prev_toks_ to
+  // curr_toks_.
+  const int32 frame = decodable->NumFramesReady() - num_frames_decoded_ - 1;
   for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
-    const double final_cost = fst_.Final(siter.Value()).Value();
-    if (final_cost < fst::StdArc::Weight::Zero().Value()) {
-      curr_toks_.insert(make_pair(siter.Value(), Token(final_cost)));
+    const StateId state = siter.Value();
+    for (ArcIterator aiter(fst_, state); !aiter.Done(); aiter.Next()) {
+      const StdArc& arc = aiter.Value();
+      TokenMap::const_iterator ptok = prev_toks_.find(arc.nextstate);
+      if (arc.ilabel == 0 || ptok == prev_toks_.end())
+        continue;
+      const double acoustic_cost =
+          -decodable->LogLikelihood(frame, arc.ilabel);
+      Token& ctok = curr_toks_.insert(make_pair(
+          state, Token(-kaldi::kLogZeroDouble))).first->second;
+      ctok.UpdateEmitting(
+          arc.ilabel, ptok->second.cost, arc.weight.Value(), acoustic_cost);
     }
   }
-  remaining_frames_ = decodable->NumFramesReady();
-  KALDI_ASSERT(decodable->IsLastFrame(remaining_frames_ - 1) &&
-               "Backward cannot work with an online DecodableInterface");
-  ProcessNonemitting();
+  num_frames_decoded_++;
+}
+
+
+void SimpleBackward::ProcessNonemitting() {
+  // Processes nonemitting arcs for one frame.  Propagates within
+  // curr_toks_.
+  QueueSet<StateId> queue_set;
+  for (TokenMap::iterator tok = curr_toks_.begin();
+       tok != curr_toks_.end(); ++tok) {
+    queue_set.push(tok->first);
+    tok->second.last_cost = tok->second.cost;
+    tok->second.last_ilabels = tok->second.ilabels;
+  }
+
+  while (!queue_set.empty()) {
+    const StateId state = queue_set.front();
+    queue_set.pop();
+
+    Token& ptok = curr_toks_.find(state)->second;
+    const double last_cost = ptok.last_cost;
+    const LabelMap last_cost_labels = ptok.last_ilabels;
+    ptok.last_cost = -kaldi::kLogZeroDouble;
+    ptok.last_ilabels.clear();
+
+    for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+      for (ArcIterator aiter(fst_, siter.Value()); !aiter.Done();
+           aiter.Next()) {
+        const StdArc& arc = aiter.Value();
+        if (arc.ilabel != 0 || arc.nextstate != state) continue;
+        Token& ctok = curr_toks_.insert(make_pair(
+            siter.Value(), Token(-kaldi::kLogZeroDouble))).first->second;
+        if (ctok.UpdateNonEmitting(
+                last_cost_labels, last_cost, arc.weight.Value(), delta_)) {
+          queue_set.push(siter.Value());
+        }
+      }
+    }
+  }
 }
 
 
 double SimpleBackward::TotalCost() const {
   TokenMap::const_iterator tok = curr_toks_.find(fst_.Start());
-  const double total_cost = tok != curr_toks_.end() ?
-      tok->second.cost : -kaldi::kLogZeroDouble;
+  const double total_cost =
+      tok == curr_toks_.end() ? -kaldi::kLogZeroDouble : tok->second.cost;
   if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
                                   // some kind of error, most likely.
     KALDI_WARN << "Found NaN (likely failure in decoding)";
@@ -72,76 +142,6 @@ double SimpleBackward::TotalCost() const {
 }
 
 
-void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
-  // Processes emitting arcs for one frame.  Propagates from next_toks_ to
-  // curr_toks_.
-  const int32 frame = --remaining_frames_;
-  // TODO(jpuigcerver): This does not take advantage of prunning!
-  // Running time is O(|V| + |E|), where |V| is the number of states in
-  // the FST and |E| the number of arcs.
-  // This should be reduced to O(|K| + |E|), where |K| is the number of
-  // active states after prunning.
-  // However, I do not know how to iterate through the input arcs of a
-  // given state using OpenFST. So, I cannot simply iterate through the
-  // alive states in next_toks_, as I do in the Forward algorithm.
-  for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
-    for (ArcIterator aiter(fst_, siter.Value()); !aiter.Done();
-         aiter.Next()) {
-      const StdArc& arc = aiter.Value();
-      if (arc.ilabel == 0) continue;
-      TokenMap::const_iterator ntok = next_toks_.find(arc.nextstate);
-      if (ntok == next_toks_.end()) continue;
-      const double acoustic_cost = -decodable->LogLikelihood(frame, arc.ilabel);
-      TokenMap::iterator ctok = curr_toks_.insert(
-          make_pair(siter.Value(), Token(-kaldi::kLogZeroDouble))).first;
-      ctok->second.Update(ntok->second, arc, acoustic_cost);
-    }
-  }
-}
 
-void SimpleBackward::ProcessNonemitting() {
-  /// WTF!!!
-}
-
-
-void SimpleBackward::UpdateBackwardTable() {
-  /*backward_.push_back(unordered_map<Label, double>());
-  for (TokenMap::const_iterator tok = curr_toks_.begin();
-       tok != curr_toks_.end(); ++tok) {
-    for (LabelMap::const_iterator ti = tok->second.ilabels.begin();
-         ti != tok->second.ilabels.end(); ++ti) {
-      LabelMap::iterator fi = backward_.back().insert(
-          make_pair(ti->first, -kaldi::kLogZeroDouble)).first;
-      fi->second = -kaldi::LogAdd(-fi->second, -ti->second);
-    }
-  }*/
-}
-
-
-// static
-void SimpleBackward::PruneToks(BaseFloat beam, TokenMap *toks) {
-  if (toks->empty()) {
-    KALDI_VLOG(2) <<  "No tokens to prune.\n";
-    return;
-  }
-  TokenMap::const_iterator tok = toks->begin();
-  // Get best cost
-  double best_cost = tok->second.cost;
-  for (++tok; tok != toks->end(); ++tok) {
-    best_cost = std::min(best_cost, tok->second.cost);
-  }
-  // Mark all tokens with cost greater than the cutoff
-  std::vector<TokenMap::const_iterator> remove_toks;
-  const double cutoff = best_cost + beam;
-  for (tok = toks->begin(); tok != toks->end(); ++tok) {
-    if (tok->second.cost > cutoff) remove_toks.push_back(tok);
-  }
-  // Prune tokens
-  for (size_t i = 0; i < remove_toks.size(); ++i) {
-    toks->erase(remove_toks[i]);
-  }
-  KALDI_VLOG(2) <<  "Pruned " << remove_toks.size() << " to "
-                << toks->size() << " toks.\n";
-}
 
 } // end namespace kaldi.

@@ -5,7 +5,7 @@ include ../kaldi.mk
 
 TESTFILES = simple-forward-test simple-backward-test
 
-OBJFILES = simple-forward.o simple-backward.o
+OBJFILES = simple-forward.o simple-backward.o simple-common.o
 
 LIBNAME = kaldi-fb
 

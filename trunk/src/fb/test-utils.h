@@ -85,6 +85,22 @@ void CreateWFST_Arbitrary(fst::VectorFst<fst::StdArc>* fst) {
   fst->SetFinal(3, -log(0.5));
 }
 
+// A WFST with an epsilon loop which is k-closed for the log-semiring
+void CreateWFST_EpsilonLoop(fst::VectorFst<fst::StdArc>* fst) {
+  fst->DeleteStates();
+
+  fst->AddState();  // State 0
+  fst->AddState();  // State 1
+
+  fst->AddArc(0, fst::StdArc(0, 0, -log(0.5), 1));
+  fst->AddArc(0, fst::StdArc(1, 1, -log(0.5), 0));
+  fst->AddArc(0, fst::StdArc(2, 2, -log(0.5), 0));
+  fst->AddArc(1, fst::StdArc(0, 0, -log(0.5), 1));
+
+  fst->SetStart(0);
+  fst->SetFinal(1, -log(1.0));
+}
+
 void CreateObservation_Empty(DummyDecodable* decodable) {
   decodable->Init(2, 0, std::vector<BaseFloat>());
 }

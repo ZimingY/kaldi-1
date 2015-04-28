@@ -2,196 +2,114 @@
 #include "fb/test-utils.h"
 #include "util/kaldi-io.h"
 
-using fst::VectorFst;
-using fst::StdArc;
-typedef fst::StdArc::Label Label;
-
-namespace kaldi {
-namespace unittest {
-
-void PrintBackwardTable(const SimpleBackward& backward) {
-  typedef unordered_map<Label, double> label_weight_map;
-  typedef vector<label_weight_map> fwd_table_type;
-  fwd_table_type table = backward.GetTable();
-  for (size_t t = 0; t < table.size(); ++t) {
-    for (label_weight_map::const_iterator e = table[t].begin();
-         e != table[t].end(); ++e) {
-      std::cout << "F[" << t << "," << e->first << "] = "
-                << e->second << std::endl;
-    }
-  }
-}
-
-void CreateWFST_SingleState(VectorFst<StdArc>* fst) {
-  fst->DeleteStates();
-
-  fst->AddState();  // State 0
-
-  fst->SetStart(0);
-  fst->SetFinal(0, -log(0.5));
-
-  fst->AddArc(0, StdArc(1, 1, -log(0.5), 0));  // self-loop in state 0, label 1
-  fst->AddArc(0, StdArc(2, 2, -log(0.5), 0));  // self-loop in state 0, label 2
-}
-
-void CreateWFST_TwoStatesWithEpsilonTransition(VectorFst<StdArc>* fst) {
-  fst->DeleteStates();
-
-  fst->AddState();  // State 0
-  fst->AddState();  // State 1
-
-  fst->SetStart(0);
-  fst->SetFinal(0, -log(1.0));
-  fst->SetFinal(1, -log(0.5));
-
-  fst->AddArc(0, StdArc(0, 0, -log(0.5), 1));  // epsilon transition
-  fst->AddArc(0, StdArc(1, 1, -log(0.3), 0));  // self-loop in state 0, label 1
-  fst->AddArc(1, StdArc(2, 2, -log(0.5), 1));  // self-loop in state 1, label 2
-}
-
-void CreateWFST_LinearHMM(VectorFst<StdArc>* fst) {
-  fst->DeleteStates();
-
-  fst->AddState();  // State 0
-  fst->AddState();  // State 1
-  fst->AddState();  // State 2
-
-  fst->SetStart(0);
-  fst->SetFinal(2, 0.0);  // Only final state is 2, with prob = 1.0
-
-  fst->AddArc(0, StdArc(1, 1, -log(0.3), 0));
-  fst->AddArc(0, StdArc(2, 2, -log(0.1), 0));
-  fst->AddArc(0, StdArc(1, 1, -log(0.2), 1));
-  fst->AddArc(0, StdArc(2, 2, -log(0.4), 1));
-
-  fst->AddArc(1, StdArc(2, 2, -log(0.2), 1));
-  fst->AddArc(1, StdArc(3, 3, -log(0.3), 1));
-  fst->AddArc(1, StdArc(2, 2, -log(0.3), 2));
-  fst->AddArc(1, StdArc(3, 3, -log(0.2), 2));
-}
-
-void CreateWFST_Arbitrary(VectorFst<StdArc>* fst) {
-  fst->DeleteStates();
-
-  fst->AddState();
-  fst->AddState();
-  fst->AddState();
-  fst->AddState();
-
-  fst->SetStart(0);
-  fst->SetFinal(0, -log(1.0));
-  fst->SetFinal(3, -log(0.5));
-
-  fst->AddArc(0, StdArc(1, 1, -log(1.0), 0));
-  fst->AddArc(0, StdArc(2, 2, -log(1.2), 0));
-  fst->AddArc(0, StdArc(1, 1, -log(0.5), 1));
-  fst->AddArc(0, StdArc(0, 0, -log(1.0), 1));
-
-  fst->AddArc(1, StdArc(1, 1, -log(0.5), 1));
-  fst->AddArc(1, StdArc(0, 0, -log(1.0), 2));
-  fst->AddArc(1, StdArc(1, 1, -log(0.5), 3));
-  fst->AddArc(1, StdArc(2, 2, -log(0.2), 3));
-
-  fst->AddArc(2, StdArc(1, 1, -log(1.0), 0));
-  fst->AddArc(2, StdArc(2, 2, -log(0.1), 3));
-
-  fst->AddArc(3, StdArc(2, 2, -log(0.5), 2));
-}
-
-void CreateObservation_Empty(DummyDecodable* decodable) {
-  decodable->Init(3, 0, vector<BaseFloat>());
-}
-
-void CreateObservation_Short(DummyDecodable* decodable) {
-  vector<BaseFloat> observations(3 * 1);
-  observations[0] = log(0.6);  // input label = 1
-  observations[1] = log(0.4);  // input label = 2
-  observations[2] = log(0.0);  // input label = 3, (cannot produce this)
-
-  decodable->Init(3, 1, observations);
-}
-
-void CreateObservation_Large(DummyDecodable* decodable) {
-  vector<BaseFloat> observations(3 * 3);
-  // frame = 0
-  observations[0] = log(0.1);
-  observations[1] = log(0.9);
-  observations[2] = log(0.0);  // input label = 3, (cannot produce this)
-  // frame = 1
-  observations[3] = log(0.5);
-  observations[4] = log(0.5);
-  observations[5] = log(0.0);  // input label = 3, (cannot produce this)
-  // frame = 2
-  observations[6] = log(0.2);
-  observations[7] = log(0.5);
-  observations[8] = log(0.3);
-
-  decodable->Init(3, 3, observations);
-}
-
-void CreateObservation_LargeNoStochastic(DummyDecodable* decodable) {
-  vector<BaseFloat> observations(3 * 4);
-  // frame = 0
-  observations[0] = log(0.2);
-  observations[1] = log(0.5);
-  observations[2] = log(1.0);
-  // frame = 1
-  observations[3] = log(1.0);
-  observations[4] = log(1.0);
-  observations[5] = log(1.0);
-  // frame = 2
-  observations[6] = log(0.0);
-  observations[7] = log(0.5);
-  observations[8] = log(0.3);
-  // frame = 3
-  observations[9]  = log(0.3);
-  observations[10] = log(0.7);
-  observations[11] = log(0.3);
-
-  decodable->Init(3, 4, observations);
-}
-
-}  // namespace unittest
-}  // namespace kaldi
+#define EQ_EPS 1E-7
 
 int main(int argc, char** argv) {
-  VectorFst<StdArc> fst;
-  kaldi::unittest::DummyDecodable decodable;
-  kaldi::SimpleBackward backward(fst, 1E+9, 1E-9);
+  fst::VectorFst<fst::StdArc> fst;
+  kaldi::unittest::DummyDecodable dec;
+  kaldi::SimpleBackward backward(fst, 1E9, 1E-9);
 
-  void (*fsts[])(VectorFst<StdArc>*) = {
-    kaldi::unittest::CreateWFST_SingleState,
-    kaldi::unittest::CreateWFST_TwoStatesWithEpsilonTransition,
-    kaldi::unittest::CreateWFST_Arbitrary
-  };
+  // Dummy WFST with a single non-final state. Empty input sequence.
+  kaldi::unittest::CreateWFST_DummyState(&fst, false);
+  kaldi::unittest::CreateObservation_Empty(&dec);
+  KALDI_ASSERT(backward.Backward(&dec) == false);
+  kaldi::AssertEqual(backward.TotalCost(), -kaldi::kLogZeroDouble, EQ_EPS);
 
-  void (*deco[])(kaldi::unittest::DummyDecodable*) = {
-    kaldi::unittest::CreateObservation_Empty,
-    kaldi::unittest::CreateObservation_Short,
-    kaldi::unittest::CreateObservation_Large,
-    kaldi::unittest::CreateObservation_LargeNoStochastic
-  };
+  // Dummy WFST with a single final state. Empty input sequence.
+  kaldi::unittest::CreateWFST_DummyState(&fst, true);
+  kaldi::unittest::CreateObservation_Empty(&dec);
+  KALDI_ASSERT(backward.Backward(&dec));
+  kaldi::AssertEqual(backward.TotalCost(), 0.0, EQ_EPS);
 
-  const double expected_total_cost[] = {
-    -log(0.5), -log(0.25), -log(0.04375), -log(0.021875),
-    -log(1.25), -log(0.275), -log(0.00811875), -log(0.003784375),
-    -log(1.0), -log(1.89)
-  };
+  // Dummy WFST with a single final state. Non-empty input sequence.
+  kaldi::unittest::CreateWFST_DummyState(&fst, true);
+  kaldi::unittest::CreateObservation_Arbitrary(&dec);
+  KALDI_ASSERT(backward.Backward(&dec) == false);
+  kaldi::AssertEqual(backward.TotalCost(), -kaldi::kLogZeroDouble, EQ_EPS);
 
-  const int NF = 3;
-  const int ND = 4;
+  // Arbitrary WFST. Empty input sequence.
+  kaldi::unittest::CreateWFST_Arbitrary(&fst);
+  kaldi::unittest::CreateObservation_Empty(&dec);
+  KALDI_ASSERT(backward.Backward(&dec));
+  kaldi::AssertEqual(backward.TotalCost(), -log(1.75), EQ_EPS);
 
-  for (int f = 0; f < NF; ++f) {
-    fsts[f](&fst);
-    for (int d = 0; d < 2; ++d) {
-      deco[d](&decodable);
-      KALDI_ASSERT(backward.Backward(&decodable));
-      KALDI_LOG << f << " " << d << " "
-                << backward.TotalCost() << " " << expected_total_cost[f * ND + d];
-      kaldi::AssertEqual(
-          backward.TotalCost(), expected_total_cost[f * ND + d], 1E-9);
-    }
-  }
+  // Arbitrary WFST. Arbitrary input sequence.
+  kaldi::unittest::CreateWFST_Arbitrary(&fst);
+  kaldi::unittest::CreateObservation_Arbitrary(&dec);
+  KALDI_ASSERT(backward.Backward(&dec));
+  kaldi::AssertEqual(backward.TotalCost(), -log(145.9125), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable().size() == 4);
+
+  KALDI_ASSERT(backward.GetTable()[3].count(1));
+  KALDI_ASSERT(backward.GetTable()[3].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[3].find(1)->second, -log(11.5375), EQ_EPS);
+  kaldi::AssertEqual(
+      backward.GetTable()[3].find(2)->second, -log(6.5625), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[2].count(1));
+  KALDI_ASSERT(backward.GetTable()[2].count(2) == 0);
+  kaldi::AssertEqual(
+      backward.GetTable()[2].find(1)->second, -log(89.98125), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[1].count(1) == 0);
+  KALDI_ASSERT(backward.GetTable()[1].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[1].find(2)->second, -log(135.028125), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[0].count(1));
+  KALDI_ASSERT(backward.GetTable()[0].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[0].find(1)->second, -log(97.97109375), EQ_EPS);
+  kaldi::AssertEqual(
+      backward.GetTable()[0].find(2)->second, -log(94.39921875), EQ_EPS);
+
+
+  /////////////////////////////////////////
+  // A WFST with an epsilon loop.
+  /////////////////////////////////////////
+
+  // Empty input sequence
+  kaldi::unittest::CreateWFST_EpsilonLoop(&fst);
+  kaldi::unittest::CreateObservation_Empty(&dec);
+  KALDI_ASSERT(backward.Backward(&dec));
+  // kaldi::AssertEqual will fail, since log(1.0) is exactly 0.0, but
+  // the total cost is something like 6.4E-8. kaldi::AssertEqual checks
+  // relative error, and it will fail in this case, since one term is 0.0
+  KALDI_ASSERT(fabs(backward.TotalCost() - log(1.0)) < EQ_EPS);
+
+  // Arbitrary input sequence
+  kaldi::unittest::CreateWFST_EpsilonLoop(&fst);
+  kaldi::unittest::CreateObservation_Arbitrary(&dec);
+  KALDI_ASSERT(backward.Backward(&dec));
+  kaldi::AssertEqual(backward.TotalCost(), -log(0.375), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable().size() == 4);
+
+  KALDI_ASSERT(backward.GetTable()[3].count(1));
+  KALDI_ASSERT(backward.GetTable()[3].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[3].find(1)->second, -log(0.65), EQ_EPS);
+  kaldi::AssertEqual(
+      backward.GetTable()[3].find(2)->second, -log(0.35), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[2].count(1));
+  KALDI_ASSERT(backward.GetTable()[2].count(2) == 0);
+  kaldi::AssertEqual(
+      backward.GetTable()[2].find(1)->second, -log(1.5), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[1].count(1) == 0);
+  KALDI_ASSERT(backward.GetTable()[1].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[1].find(2)->second, -log(0.75), EQ_EPS);
+
+  KALDI_ASSERT(backward.GetTable()[0].count(1));
+  KALDI_ASSERT(backward.GetTable()[0].count(2));
+  kaldi::AssertEqual(
+      backward.GetTable()[0].find(1)->second, -log(0.1875), EQ_EPS);
+  kaldi::AssertEqual(
+      backward.GetTable()[0].find(2)->second, -log(0.1875), EQ_EPS);
 
   std::cout << "Test OK.\n";
   return 0;

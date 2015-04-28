@@ -25,6 +25,7 @@
 #include "itf/decodable-itf.h"
 #include "lat/kaldi-lattice.h"
 #include "util/stl-utils.h"
+#include "fb/simple-common.h"
 
 namespace kaldi {
 
@@ -36,8 +37,8 @@ class SimpleForward {
   typedef fst::Fst<StdArc> Fst;
   typedef fst::ArcIterator<Fst> ArcIterator;
 
-  SimpleForward(const Fst &fst, BaseFloat beam, BaseFloat loop_epsilon) :
-      fst_(fst), beam_(beam), loop_epsilon_(loop_epsilon) { }
+  SimpleForward(const Fst &fst, BaseFloat beam, BaseFloat delta) :
+      fst_(fst), beam_(beam), delta_(delta) { }
 
   ~SimpleForward();
 
@@ -56,18 +57,12 @@ class SimpleForward {
 
   void InitForward();
 
-  /// This will decode until there are no more frames ready in the decodable
-  /// object, but if max_num_frames is >= 0 it will decode no more than
-  /// that many frames.
-  void AdvanceForward(DecodableInterface *decodable,
-                      int32 max_num_frames = -1);
-
   /// Returns the number of frames already decoded.
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
   /// Returns the forward table of the in the input labels of the WFST
   /// This typically is the forward table of the transition-ids
-  const std::vector<unordered_map<Label, double> >& GetTable() const {
+  const vector<unordered_map<Label, double> >& GetTable() const {
     return forward_;
   }
 
@@ -80,43 +75,15 @@ class SimpleForward {
   void ProcessEmitting(DecodableInterface *decodable);
   void ProcessNonemitting();
 
-  // Add a new row to the table, with the cost of each label (i.e.
-  // transition-id) reaching the end of the input.
-  void UpdateForwardTable();
-
-  typedef unordered_map<Label, double>  LabelMap;
-  std::vector<LabelMap> forward_;
-
-  struct Token {
-    double cost;            // total cost to the state
-    double last_cost;       // cost to the state, since the last extraction from
-                            // the shortest-distance algorithm queue (see [1]).
-    LabelMap ilabels;       // total cost to the state, for each input symbol.
-    LabelMap last_ilabels;  //  cost to the state, for each input symbol,
-                            // since the last extraction from the
-                            // shortest-distance algorithm queue (see [1]).
-
-    Token(double c) : cost(c), last_cost(-kaldi::kLogZeroDouble) { }
-
-    void UpdateEmitting(
-        const Label label, const double prev_cost, const double edge_cost,
-        const double acoustic_cost);
-
-    bool UpdateNonEmitting(
-        const LabelMap& parent_ilabels, const double prev_cost,
-        const double edge_cost, const double threshold);
-  };
-
-  typedef unordered_map<StateId, Token> TokenMap;
+  vector<LabelMap> forward_;
+  vector<double> scale_factor_;
   TokenMap curr_toks_;
   TokenMap prev_toks_;
   const Fst &fst_;
   BaseFloat beam_;
-  BaseFloat loop_epsilon_;
+  BaseFloat delta_;
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
-
-  static void PruneToks(BaseFloat beam, TokenMap *toks);
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleForward);
 };
