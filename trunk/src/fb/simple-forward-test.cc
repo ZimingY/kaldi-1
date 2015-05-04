@@ -2,7 +2,7 @@
 #include "fb/test-utils.h"
 #include "util/kaldi-io.h"
 
-#define EQ_EPS 1E-7
+#define EQ_EPS 1E-6
 
 int main(int argc, char** argv) {
   fst::VectorFst<fst::StdArc> fst;
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
   kaldi::unittest::CreateObservation_Empty(&dec);
   KALDI_ASSERT(forward.Forward(&dec));
   // kaldi::AssertEqual will fail, since log(1.0) is exactly 0.0, but
-  // the total cost is something like 6.4E-8. kaldi::AssertEqual checks
+  // the total cost is something like 2E-7. kaldi::AssertEqual checks
   // relative error, and it will fail in this case, since one term is 0.0
   KALDI_ASSERT(fabs(forward.TotalCost() - log(1.0)) < EQ_EPS);
 

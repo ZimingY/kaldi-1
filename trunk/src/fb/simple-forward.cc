@@ -51,8 +51,15 @@ bool SimpleForward::Forward(DecodableInterface *decodable) {
     ProcessEmitting(decodable);
     ProcessNonemitting();
     PruneToks(beam_, &curr_toks_);
-    forward_.push_back(unordered_map<Label, double>());
+    forward_.push_back(unordered_map<Label, BaseFloat>());
     AccumulateToks(curr_toks_, &forward_.back());
+    for (TokenMap::const_iterator t = curr_toks_.begin(); t != curr_toks_.end(); ++t) {
+      std::cerr << "F[" << num_frames_decoded_ << "," << t->first << "] = " << exp(-t->second.cost) << " (";
+      for (LabelMap::const_iterator l = t->second.ilabels.begin(); l != t->second.ilabels.end(); ++l) {
+        std::cerr << " " << l->first << ":" << exp(-l->second);
+      }
+      std::cerr << " )" << std::endl;
+    }
   }
   return (!curr_toks_.empty());
 }
@@ -69,10 +76,10 @@ void SimpleForward::ProcessEmitting(DecodableInterface *decodable) {
          aiter.Next()) {
       const StdArc& arc = aiter.Value();
       if (arc.ilabel != 0) {  // propagate emitting only...
-        const double acoustic_cost =
+        const BaseFloat acoustic_cost =
             -decodable->LogLikelihood(frame, arc.ilabel);
         Token& ctok = curr_toks_.insert(make_pair(
-            arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
+            arc.nextstate, Token(-kaldi::kLogZeroBaseFloat))).first->second;
         ctok.UpdateEmitting(
             arc.ilabel, ptok->second.cost, arc.weight.Value(), acoustic_cost);
       }
@@ -98,9 +105,9 @@ void SimpleForward::ProcessNonemitting() {
     queue_set.pop();
 
     Token& ptok = curr_toks_.find(state)->second;
-    const double last_cost = ptok.last_cost;
+    const BaseFloat last_cost = ptok.last_cost;
     const LabelMap last_cost_labels = ptok.last_ilabels;
-    ptok.last_cost = -kaldi::kLogZeroDouble;
+    ptok.last_cost = -kaldi::kLogZeroBaseFloat;
     ptok.last_ilabels.clear();
 
     for (ArcIterator aiter(fst_, state); !aiter.Done();
@@ -108,7 +115,7 @@ void SimpleForward::ProcessNonemitting() {
       const StdArc& arc = aiter.Value();
       if (arc.ilabel != 0) continue;
       Token& ctok = curr_toks_.insert(make_pair(
-          arc.nextstate, Token(-kaldi::kLogZeroDouble))).first->second;
+          arc.nextstate, Token(-kaldi::kLogZeroBaseFloat))).first->second;
       if (ctok.UpdateNonEmitting(
               last_cost_labels, last_cost, arc.weight.Value(), delta_)) {
         queue_set.push(arc.nextstate);
@@ -118,8 +125,8 @@ void SimpleForward::ProcessNonemitting() {
 }
 
 
-double SimpleForward::TotalCost() const {
-  double total_cost = -kaldi::kLogZeroDouble;
+BaseFloat SimpleForward::TotalCost() const {
+  BaseFloat total_cost = -kaldi::kLogZeroBaseFloat;
   for (TokenMap::const_iterator tok = curr_toks_.begin();
        tok != curr_toks_.end(); ++tok) {
     total_cost = -kaldi::LogAdd(
@@ -128,7 +135,7 @@ double SimpleForward::TotalCost() const {
   if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
                                   // some kind of error, most likely.
     KALDI_WARN << "Found NaN (likely failure in decoding)";
-    return -kaldi::kLogZeroDouble;
+    return -kaldi::kLogZeroBaseFloat;
   }
   return total_cost;
 }

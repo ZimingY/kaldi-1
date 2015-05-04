@@ -53,7 +53,7 @@ class SimpleForward {
   /// TotalCost() returns the total cost of reaching any of the final states.
   /// This is useful to obtain the total likelihood of the complete
   /// decoding input. It will usually be nonnegative.
-  double TotalCost() const;
+  BaseFloat TotalCost() const;
 
   void InitForward();
 
@@ -62,11 +62,9 @@ class SimpleForward {
 
   /// Returns the forward table of the in the input labels of the WFST
   /// This typically is the forward table of the transition-ids
-  const vector<unordered_map<Label, double> >& GetTable() const {
+  const vector<LabelMap>& GetTable() const {
     return forward_;
   }
-
-  void FillPosterior(Posterior* posterior) const;
 
  private:
 
@@ -76,7 +74,7 @@ class SimpleForward {
   void ProcessNonemitting();
 
   vector<LabelMap> forward_;
-  vector<double> scale_factor_;
+  vector<BaseFloat> scale_factor_;
   TokenMap curr_toks_;
   TokenMap prev_toks_;
   const Fst &fst_;

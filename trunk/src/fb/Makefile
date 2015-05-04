@@ -3,7 +3,7 @@ all:
 EXTRA_CXXFLAGS = -Wno-sign-compare -O3
 include ../kaldi.mk
 
-TESTFILES = simple-forward-test simple-backward-test
+TESTFILES = simple-forward-test simple-backward-test simple-posteriors-test
 
 OBJFILES = simple-forward.o simple-backward.o simple-common.o
 

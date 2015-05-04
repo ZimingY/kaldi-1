@@ -27,34 +27,38 @@ namespace kaldi {
 
 typedef fst::StdArc::StateId StateId;
 typedef fst::StdArc::Label Label;
-typedef unordered_map<Label, double>  LabelMap;
+typedef unordered_map<Label, BaseFloat>  LabelMap;
 
 struct Token {
-  double cost;            // total cost to the state
-  double last_cost;       // cost to the state, since the last extraction from
+  BaseFloat cost;         // total cost to the state
+  BaseFloat last_cost;    // cost to the state, since the last extraction from
                           // the shortest-distance algorithm queue (see [1]).
   LabelMap ilabels;       // total cost to the state, for each input symbol.
   LabelMap last_ilabels;  //  cost to the state, for each input symbol,
                           // since the last extraction from the
                           // shortest-distance algorithm queue (see [1]).
 
-  Token(double c) : cost(c), last_cost(-kaldi::kLogZeroDouble) { }
+  Token(BaseFloat c) : cost(c), last_cost(-kaldi::kLogZeroBaseFloat) { }
 
   // Update token when processing non-epsilon edges
   void UpdateEmitting(
-      const Label label, const double prev_cost, const double edge_cost,
-      const double acoustic_cost);
+      const Label label, const BaseFloat prev_cost, const BaseFloat edge_cost,
+      const BaseFloat acoustic_cost);
 
   // Update token when processing epsilon edges
   bool UpdateNonEmitting(
-      const LabelMap& parent_ilabels, const double prev_cost,
-      const double edge_cost, const double threshold);
+      const LabelMap& parent_ilabels, const BaseFloat prev_cost,
+      const BaseFloat edge_cost, const BaseFloat threshold);
 };
 typedef unordered_map<StateId, Token> TokenMap;
 
 void AccumulateToks(const TokenMap& toks, LabelMap *acc);
 void PruneToks(BaseFloat beam, TokenMap *toks);
-double RescaleToks(TokenMap* toks);
+BaseFloat RescaleToks(TokenMap* toks);
+
+void ComputePosteriorgram(
+    const std::vector<LabelMap>& fwd, const std::vector<LabelMap>& bkw,
+    std::vector<LabelMap>* pst);
 
 }  // namespace kaldi
 

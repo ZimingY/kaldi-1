@@ -54,7 +54,7 @@ class SimpleBackward {
   /// TotalCost() returns the total cost of reaching any of the final states.
   /// This is useful to obtain the total likelihood of the complete
   /// decoding input. It will usually be nonnegative.
-  double TotalCost() const;
+  BaseFloat TotalCost() const;
 
   void InitBackward(DecodableInterface *decodable);
 
@@ -63,11 +63,9 @@ class SimpleBackward {
 
   /// Returns the backward table of the in the input labels of the WFST
   /// This typically is the backward table of the transition-ids
-  const vector<unordered_map<Label, double> >& GetTable() const {
+  const vector<unordered_map<Label, BaseFloat> >& GetTable() const {
     return backward_;
   }
-
-  void FillPosterior(Posterior* posterior) const;
 
  private:
 
@@ -77,7 +75,7 @@ class SimpleBackward {
   void ProcessNonemitting();
 
   vector<LabelMap> backward_;
-  vector<double> scale_factor_;
+  vector<BaseFloat> scale_factor_;
 
   typedef unordered_map<StateId, Token> TokenMap;
   TokenMap curr_toks_;

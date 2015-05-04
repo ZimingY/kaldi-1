@@ -6,6 +6,7 @@
 #include "fstext/fstext-lib.h"
 #include "gmm/decodable-am-diag-gmm.h"
 
+#include "fb/simple-common.h"
 #include "fb/simple-forward.h"
 #include "fb/simple-backward.h"
 
@@ -18,11 +19,11 @@ int main(int argc, char *argv[]) {
     typedef fst::StdArc::Label Label;
 
     const char *usage =
-        "fb-align-compiled 1.mdl ark:graphs.fsts scp:train.scp ark:1.fb\n";
+        "gmm-fb-compiled 1.mdl ark:graphs.fsts scp:train.scp ark:1.psts.ark\n";
 
     ParseOptions po(usage);
     BaseFloat beam = std::numeric_limits<BaseFloat>::infinity();
-    BaseFloat delta = 1E-6;
+    BaseFloat delta = 0.000976562; // same delta as in fstshortestdistance
 
     po.Register("beam", &beam, "Beam prunning threshold");
     po.Register("delta", &delta, "Comparison delta (see fstshortestdistance)");
@@ -36,7 +37,7 @@ int main(int argc, char *argv[]) {
     std::string model_in_filename = po.GetArg(1),
         fst_rspecifier = po.GetArg(2),
         feature_rspecifier = po.GetArg(3),
-        alignment_wspecifier = po.GetArg(4);
+        posterior_wspecifier = po.GetArg(4);
 
     TransitionModel trans_model;
     AmDiagGmm am_gmm;
@@ -47,14 +48,13 @@ int main(int argc, char *argv[]) {
       am_gmm.Read(ki.Stream(), binary);
     }
 
-
     SequentialTableReader<fst::VectorFstHolder> fst_reader(fst_rspecifier);
     RandomAccessBaseFloatMatrixReader feature_reader(feature_rspecifier);
+    PosteriorWriter posterior_writer(posterior_wspecifier);
 
-    int num_done = 0, num_err = 0, num_retry = 0;
+    int num_done = 0, num_err = 0;
     double tot_like = 0.0;
     kaldi::int64 frame_count = 0;
-    std::unordered_map<Label, double> occupancy;
 
     for (; !fst_reader.Done(); fst_reader.Next()) {
       std::string utt = fst_reader.Key();
@@ -70,13 +70,13 @@ int main(int argc, char *argv[]) {
 
         if (!forwarder.Forward(&gmm_decodable)) {
           KALDI_WARN << "Forward did not reach any final state for utt "
-                     << fst_reader.Key();
+                     << utt;
           ++num_err;
           continue;
         }
         if (!backwarder.Backward(&gmm_decodable)) {
           KALDI_WARN << "Backward did not reach the start state for utt "
-                     << fst_reader.Key();
+                     << utt;
           ++num_err;
           continue;
         }
@@ -90,41 +90,24 @@ int main(int argc, char *argv[]) {
         const double lkh_back = -backwarder.TotalCost();
         kaldi::AssertEqual(lkh, lkh_back);
 #endif
-        KALDI_LOG << "Processing Data: " << fst_reader.Key();
+        KALDI_LOG << "Processing Data: " << utt;
         KALDI_LOG << "Utterance prob per frame = " << (lkh / nfrm);
         tot_like += lkh;
         frame_count += nfrm;
         ++num_done;
 
-        std::vector<std::unordered_map<Label, double> > pst =
-            forwarder.GetTable();
+        std::vector<LabelMap> pst_map;
+        ComputePosteriorgram(
+            forwarder.GetTable(), backwarder.GetTable(), &pst_map);
+        Posterior pst(pst_map.size());
         for (size_t t = 0; t < pst.size(); ++t) {
-          // forward * backward
-          for (std::unordered_map<Label,double>::const_iterator bi =
-                   backwarder.GetTable()[t].begin();
-               bi != backwarder.GetTable()[t].end(); ++bi) {
-            double& ctl = pst[t].insert(make_pair(
-                bi->first, -kaldi::kLogZeroDouble)).first->second;
-            ctl += bi->second;
-          }
-          double sum_t = -kaldi::kLogZeroDouble;
-          for (std::unordered_map<Label,double>::const_iterator it =
-                   pst[t].begin(); it != pst[t].end(); ++it) {
-            sum_t = -kaldi::LogAdd(-sum_t, -it->second);
-          }
-          KALDI_LOG << "sum(" << t << ") = " << sum_t;
-          // normalize for time t
-          for (std::unordered_map<Label,double>::iterator it = pst[t].begin();
-               it != pst[t].end(); ++it) {
-            it->second -= sum_t;
-            KALDI_LOG << "N(" << fst_reader.Key() << "," << t << ","
-                      << it->first << ") -> " << it->second;
-            double& occ = occupancy.insert(make_pair(
-                it->first, -kaldi::kLogZeroDouble)).first->second;
-            occ = -kaldi::LogAdd(-occ, -it->second);
+          for(LabelMap::const_iterator l = pst_map[t].begin();
+              l != pst_map[t].end(); ++l) {
+            pst[t].push_back(*l);
+            pst[t].back().second = exp(pst[t].back().second);
           }
         }
-
+        posterior_writer.Write(utt, pst);
       }
     }
     KALDI_LOG << "Overall log-likelihood per frame is "
@@ -132,10 +115,6 @@ int main(int argc, char *argv[]) {
               << " frames";
     KALDI_LOG << "Done " << num_done << ", errors on " << num_err;
 
-    for(std::unordered_map<Label,double>::const_iterator it = occupancy.begin();
-        it != occupancy.end(); ++it) {
-      KALDI_LOG << "Occupacy " << it->first << " = " << exp(-it->second);
-    }
 
   } catch(const std::exception &e) {
     std::cerr << e.what();
