@@ -24,9 +24,19 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
     BaseFloat beam = std::numeric_limits<BaseFloat>::infinity();
     BaseFloat delta = 0.000976562; // same delta as in fstshortestdistance
+    BaseFloat acoustic_scale = 1.0;
+    BaseFloat transition_scale = 1.0;
+    BaseFloat self_loop_scale = 1.0;
 
     po.Register("beam", &beam, "Beam prunning threshold");
     po.Register("delta", &delta, "Comparison delta (see fstshortestdistance)");
+    po.Register("transition-scale", &transition_scale,
+                "Transition-probability scale [relative to acoustics]");
+    po.Register("acoustic-scale", &acoustic_scale,
+                "Scaling factor for acoustic likelihoods");
+    po.Register("self-loop-scale", &self_loop_scale,
+                "Scale of self-loop versus non-self-loop log probs "
+                "[relative to acoustics]");
     po.Read(argc, argv);
 
     if (po.NumArgs() != 4) {
@@ -64,6 +74,17 @@ int main(int argc, char *argv[]) {
       } else {
         const Matrix<BaseFloat> &features = feature_reader.Value(utt);
         VectorFst<StdArc> fst(fst_reader.Value());
+        fst_reader.FreeCurrent();  // this stops copy-on-write of the fst
+        // by deleting the fst inside the reader, since we're about to mutate
+        // the fst by adding transition probs.
+
+        {  // Add transition-probs to the FST.
+          std::vector<int32> disambig_syms;  // empty.
+          AddTransitionProbs(trans_model, disambig_syms,
+                             transition_scale, self_loop_scale,
+                             &fst);
+        }
+
         SimpleForward forwarder(fst, beam, delta);
         SimpleBackward backwarder(fst, beam, delta);
         DecodableAmDiagGmm gmm_decodable(am_gmm, trans_model, features);

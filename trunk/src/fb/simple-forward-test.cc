@@ -1,5 +1,5 @@
 #include "fb/simple-forward.h"
-#include "fb/test-utils.h"
+#include "fb/test-common.h"
 #include "util/kaldi-io.h"
 
 int main(int argc, char** argv) {

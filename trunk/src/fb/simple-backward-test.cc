@@ -1,5 +1,5 @@
 #include "fb/simple-backward.h"
-#include "fb/test-utils.h"
+#include "fb/test-common.h"
 #include "util/kaldi-io.h"
 
 #define EQ_EPS 1E-5

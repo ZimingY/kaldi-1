@@ -1,52 +1,13 @@
-// fb/simple-forward.h
+// fb/test-common.cc
 
-#ifndef KALDI_FB_TEST_UTILS_H_
-#define KALDI_FB_TEST_UTILS_H_
-#include "itf/decodable-itf.h"
-
-#include <vector>
+#include "fb/test-common.h"
 
 namespace kaldi {
 namespace unittest {
 
-#define FB_EQ_EPS 1E-6
-
-class DummyDecodable : public DecodableInterface {
- private:
-  int32 num_states_;
-  int32 num_frames_;
-  std::vector<double> observations_;
-
- public:
-  DummyDecodable() : DecodableInterface(), num_states_(0), num_frames_(-1) { }
-
-  void Init(int32 num_states, int32 num_frames,
-            const std::vector<double>& observations) {
-    KALDI_ASSERT(observations.size() == num_states * num_frames);
-    num_states_ = num_states;
-    num_frames_ = num_frames;
-    observations_ = observations;
-  }
-
-  virtual BaseFloat LogLikelihood(int32 frame, int32 state_index) {
-    KALDI_ASSERT(frame >= 0 && frame < NumFramesReady());
-    KALDI_ASSERT(state_index > 0 && state_index <= NumIndices());
-    return observations_[frame * num_states_ + state_index - 1];
-  }
-
-  virtual int32 NumFramesReady() const { return num_frames_; }
-
-  virtual int32 NumIndices() const { return num_states_; }
-
-  virtual bool IsLastFrame(int32 frame) const {
-    KALDI_ASSERT(frame < NumFramesReady());
-    return (frame == NumFramesReady() - 1);
-  }
-};
-
 bool CheckTokenTable(
-    const vector<TokenMap>& table, const double* ref, int nt, int ns,
-    double tol = FB_EQ_EPS) {
+    const std::vector<TokenMap>& table, const double* ref, int nt, int ns,
+    double tol) {
   if (table.size() != nt) {
     KALDI_ERR << "Number of elements (" << table.size()
               << ") does not match reference (" << nt << ")";
@@ -58,8 +19,8 @@ bool CheckTokenTable(
       const double tv = tok != table[t].end() ?
           tok->second.cost : -kaldi::kLogZeroDouble;
       const double rv = ref[t * ns + s];
-      if ((rv > 1E-6 && !kaldi::ApproxEqual(tv, rv, tol)) ||
-          (rv < 1E-6 && fabs(tv - rv) > tol)) {
+      if ((rv > tol && !kaldi::ApproxEqual(tv, rv, tol)) ||
+          (rv < tol && fabs(tv - rv) > tol)) {
         KALDI_ERR << "Element t=" << t << ",s=" << s << " in table (" << tv
                   << ") does not match reference (" << rv << ")";
         return false;
@@ -70,8 +31,8 @@ bool CheckTokenTable(
 }
 
 bool CheckLabelPosteriors(
-    const vector<LabelMap>& table, const double* ref, int nt, int ns,
-    double tol = FB_EQ_EPS) {
+    const std::vector<LabelMap>& table, const double* ref, int nt, int ns,
+    double tol) {
   if (table.size() != nt) {
     KALDI_ERR << "Number of elements (" << table.size()
               << ") does not match reference (" << nt << ")";
@@ -83,8 +44,8 @@ bool CheckLabelPosteriors(
       const double tv = lab != table[t].end() ?
           lab->second : kaldi::kLogZeroDouble;
       const double rv = ref[t * ns + s];
-      if ((rv > 1E-6 && !kaldi::ApproxEqual(tv, rv, tol)) ||
-          (rv < 1E-6 && fabs(tv - rv) > tol)) {
+      if ((rv > tol && !kaldi::ApproxEqual(tv, rv, tol)) ||
+          (rv < tol && fabs(tv - rv) > tol)) {
         KALDI_ERR << "Element t=" << t << ",s=" << s << " in table (" << tv
                   << ") does not match reference (" << rv << ")";
         return false;
@@ -192,5 +153,3 @@ void CreateObservation_Arbitrary(DummyDecodable* decodable) {
 
 }  // namespace unittest
 }  // namespace kaldi
-
-#endif  // KALDI_FB_TEST_UTILS_H_
