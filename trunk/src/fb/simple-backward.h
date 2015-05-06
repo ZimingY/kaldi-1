@@ -38,7 +38,7 @@ class SimpleBackward {
   typedef fst::ArcIterator<Fst> ArcIterator;
   typedef fst::StateIterator<Fst> StateIterator;
 
-  SimpleBackward(const Fst &fst, BaseFloat beam, BaseFloat loop_epsilon) :
+  SimpleBackward(const Fst &fst, double beam, double loop_epsilon) :
       fst_(fst), beam_(beam), delta_(loop_epsilon) { }
 
   ~SimpleBackward();
@@ -49,41 +49,34 @@ class SimpleBackward {
   /// to see whether we reached a final state.
   bool Backward(DecodableInterface *decodable);
 
-  /// *** The next functions are from the "new interface". ***
-
-  /// TotalCost() returns the total cost of reaching any of the final states.
-  /// This is useful to obtain the total likelihood of the complete
-  /// decoding input. It will usually be nonnegative.
-  BaseFloat TotalCost() const;
-
-  void InitBackward(DecodableInterface *decodable);
+  /// TotalCost() returns the total cost of reaching the initial state from
+  /// any of the final states.
+  /// WARNING: This may be different to the likelihood of the observation, when
+  /// the WFST contains epsilon transitions!
+  double TotalCost() const;
 
   /// Returns the number of frames already decoded.
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
   /// Returns the backward table of the in the input labels of the WFST
   /// This typically is the backward table of the transition-ids
-  const vector<unordered_map<Label, BaseFloat> >& GetTable() const {
+  const vector<TokenMap>& GetTable() const {
     return backward_;
   }
 
  private:
+  void InitBackward(DecodableInterface *decodable);
 
   // ProcessEmitting decodes the frame num_frames_decoded_ of the
   // decodable object, then increments num_frames_decoded_.
   void ProcessEmitting(DecodableInterface *decodable);
   void ProcessNonemitting();
 
-  vector<LabelMap> backward_;
-  vector<BaseFloat> scale_factor_;
-
-  typedef unordered_map<StateId, Token> TokenMap;
-  TokenMap curr_toks_;
-  TokenMap prev_toks_;
+  vector<TokenMap> backward_;
+  vector<double> scale_factor_;
   const Fst &fst_;
-  BaseFloat beam_;
-  BaseFloat delta_;
-  // Keep track of the number of frames decoded in the current file.
+  double beam_;
+  double delta_;
   int32 num_frames_decoded_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleBackward);

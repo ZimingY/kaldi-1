@@ -9,17 +9,19 @@
 namespace kaldi {
 namespace unittest {
 
+#define FB_EQ_EPS 1E-6
+
 class DummyDecodable : public DecodableInterface {
  private:
   int32 num_states_;
   int32 num_frames_;
-  std::vector<BaseFloat> observations_;
+  std::vector<double> observations_;
 
  public:
   DummyDecodable() : DecodableInterface(), num_states_(0), num_frames_(-1) { }
 
   void Init(int32 num_states, int32 num_frames,
-            const std::vector<BaseFloat>& observations) {
+            const std::vector<double>& observations) {
     KALDI_ASSERT(observations.size() == num_states * num_frames);
     num_states_ = num_states;
     num_frames_ = num_frames;
@@ -41,6 +43,57 @@ class DummyDecodable : public DecodableInterface {
     return (frame == NumFramesReady() - 1);
   }
 };
+
+bool CheckTokenTable(
+    const vector<TokenMap>& table, const double* ref, int nt, int ns,
+    double tol = FB_EQ_EPS) {
+  if (table.size() != nt) {
+    KALDI_ERR << "Number of elements (" << table.size()
+              << ") does not match reference (" << nt << ")";
+    return false;
+  }
+  for (int t = 0; t < nt; ++t) {
+    for (int s = 0; s < ns; ++s) {
+      const TokenMap::const_iterator tok = table[t].find(s);
+      const double tv = tok != table[t].end() ?
+          tok->second.cost : -kaldi::kLogZeroDouble;
+      const double rv = ref[t * ns + s];
+      if ((rv > 1E-6 && !kaldi::ApproxEqual(tv, rv, tol)) ||
+          (rv < 1E-6 && fabs(tv - rv) > tol)) {
+        KALDI_ERR << "Element t=" << t << ",s=" << s << " in table (" << tv
+                  << ") does not match reference (" << rv << ")";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool CheckLabelPosteriors(
+    const vector<LabelMap>& table, const double* ref, int nt, int ns,
+    double tol = FB_EQ_EPS) {
+  if (table.size() != nt) {
+    KALDI_ERR << "Number of elements (" << table.size()
+              << ") does not match reference (" << nt << ")";
+    return false;
+  }
+  for (int t = 0; t < nt; ++t) {
+    for (int s = 0; s < ns; ++s) {
+      const LabelMap::const_iterator lab = table[t].find(s);
+      const double tv = lab != table[t].end() ?
+          lab->second : kaldi::kLogZeroDouble;
+      const double rv = ref[t * ns + s];
+      if ((rv > 1E-6 && !kaldi::ApproxEqual(tv, rv, tol)) ||
+          (rv < 1E-6 && fabs(tv - rv) > tol)) {
+        KALDI_ERR << "Element t=" << t << ",s=" << s << " in table (" << tv
+                  << ") does not match reference (" << rv << ")";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 
 void CreateWFST_DummyState(fst::VectorFst<fst::StdArc>* fst, bool final) {
   fst->DeleteStates();
@@ -101,12 +154,27 @@ void CreateWFST_EpsilonLoop(fst::VectorFst<fst::StdArc>* fst) {
   fst->SetFinal(1, -log(1.0));
 }
 
+void CreateWFST_EpsilonBucle(fst::VectorFst<fst::StdArc>* fst) {
+  fst->DeleteStates();
+
+  fst->AddState();  // State 0
+  fst->AddState();  // State 1
+
+  fst->AddArc(0, fst::StdArc(0, 0, -log(0.5), 1));
+  fst->AddArc(0, fst::StdArc(1, 1, -log(0.5), 0));
+  fst->AddArc(0, fst::StdArc(2, 2, -log(0.5), 0));
+  fst->AddArc(1, fst::StdArc(0, 0, -log(0.5), 0));
+
+  fst->SetStart(0);
+  fst->SetFinal(1, -log(1.0));
+}
+
 void CreateObservation_Empty(DummyDecodable* decodable) {
-  decodable->Init(2, 0, std::vector<BaseFloat>());
+  decodable->Init(2, 0, std::vector<double>());
 }
 
 void CreateObservation_Arbitrary(DummyDecodable* decodable) {
-  std::vector<BaseFloat> observation(2 * 4);
+  std::vector<double> observation(2 * 4);
   // t = 1
   observation[0] = log(0.5);
   observation[1] = log(0.5);

@@ -22,43 +22,61 @@
 
 #include "fst/fstlib.h"
 #include "util/stl-utils.h"
+#include "hmm/posterior.h"
+#include "itf/decodable-itf.h"
 
 namespace kaldi {
 
 typedef fst::StdArc::StateId StateId;
 typedef fst::StdArc::Label Label;
-typedef unordered_map<Label, BaseFloat>  LabelMap;
+typedef unordered_map<Label, double>  LabelMap;
 
+/// This structure is used by the forward/backward algorithms to
+/// store the active states in the trellis at different timesteps.
 struct Token {
-  BaseFloat cost;         // total cost to the state
-  BaseFloat last_cost;    // cost to the state, since the last extraction from
-                          // the shortest-distance algorithm queue (see [1]).
-  LabelMap ilabels;       // total cost to the state, for each input symbol.
-  LabelMap last_ilabels;  //  cost to the state, for each input symbol,
-                          // since the last extraction from the
-                          // shortest-distance algorithm queue (see [1]).
+  double cost;         // total cost to the state
+  double last_cost;    // cost to the state, since the last extraction from
+                       // the shortest-distance algorithm queue (see [1]).
 
-  Token(BaseFloat c) : cost(c), last_cost(-kaldi::kLogZeroBaseFloat) { }
+  Token(double c) : cost(c), last_cost(-kaldi::kLogZeroDouble) { }
 
   // Update token when processing non-epsilon edges
   void UpdateEmitting(
-      const Label label, const BaseFloat prev_cost, const BaseFloat edge_cost,
-      const BaseFloat acoustic_cost);
+      const double prev_cost, const double edge_cost,
+      const double acoustic_cost);
 
   // Update token when processing epsilon edges
   bool UpdateNonEmitting(
-      const LabelMap& parent_ilabels, const BaseFloat prev_cost,
-      const BaseFloat edge_cost, const BaseFloat threshold);
+      const double prev_cost, const double edge_cost,
+      const double threshold);
 };
 typedef unordered_map<StateId, Token> TokenMap;
 
-void AccumulateToks(const TokenMap& toks, LabelMap *acc);
-void PruneToks(BaseFloat beam, TokenMap *toks);
-BaseFloat RescaleToks(TokenMap* toks);
+/// Prune all tokens (states) in a TokenMap whose cost is larger than
+/// the minimum cost + the beam.
+void PruneToks(double beam, TokenMap *toks);
 
-void ComputePosteriorgram(
-    const std::vector<LabelMap>& fwd, const std::vector<LabelMap>& bkw,
+/// Rescale all tokens, such that the log-sum of the costs is 0.0 (1.0)
+double RescaleToks(TokenMap* toks);
+
+/// Given the forward and the backward tokens at time 0, compute the
+/// likelihood of the obverved sequence.
+double ComputeLikelihood(const TokenMap& fwd0, const TokenMap& bkw0);
+
+/// Compute label (typically transition-ids) posteriors for each timestep.
+/// Used for EM-reestimation of the transition/emission probabilities.
+/// NOTE: This ignores epsilon arcs, since I am assuming epsilon arcs
+/// weights are not tuneable (they do not correspond to any transition-id).
+void ComputeLabelsPosterior(
+    const fst::Fst<fst::StdArc>& fst,
+    const std::vector<TokenMap>& fwd,
+    const std::vector<TokenMap>& bkw,
+    DecodableInterface* decodable,
     std::vector<LabelMap>* pst);
+
+/// Debug utils.
+void PrintTokenMap(const TokenMap& toks, const string& name = "", int32 t = -1);
+void PrintTokenTable(const vector<TokenMap>& table, const string& name = "");
 
 }  // namespace kaldi
 

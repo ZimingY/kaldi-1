@@ -4,73 +4,38 @@
 
 namespace kaldi {
 
+
 void Token::UpdateEmitting(
-    const Label label, const BaseFloat prev_cost, const BaseFloat edge_cost,
-    const BaseFloat acoustic_cost) {
-  const BaseFloat inc_cost = prev_cost + edge_cost + acoustic_cost;
-  if (inc_cost == -kaldi::kLogZeroBaseFloat) return;
-  // Update total cost to the state, using input symbol `label'
-  LabelMap::iterator l = ilabels.insert(make_pair(
-      label, -kaldi::kLogZeroBaseFloat)).first;
-  l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-  // Update total cost to the state
-  cost = -kaldi::LogAdd(-cost, -inc_cost);
+    const double prev_cost, const double edge_cost,
+    const double acoustic_cost) {
+  cost = -kaldi::LogAdd(-cost, -(prev_cost + edge_cost + acoustic_cost));
 }
 
 
 bool Token::UpdateNonEmitting(
-    const LabelMap& parent_ilabels, const BaseFloat prev_cost,
-    const BaseFloat edge_cost, const BaseFloat threshold) {
-  const BaseFloat old_cost = cost;
-  // Propagate all the parent input symbols to this state, since we are
-  // using a epsilon-transition
-  for (unordered_map<Label, BaseFloat>::const_iterator pl =
-           parent_ilabels.begin(); pl != parent_ilabels.end(); ++pl) {
-    const BaseFloat inc_cost = pl->second + edge_cost;
-    // Total cost using symbol `pl->first' to this state
-    LabelMap::iterator l =
-        ilabels.insert(make_pair(pl->first, -kaldi::kLogZeroBaseFloat)).first;
-    l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-    // Cost since the last time this state was extracted from the search
-    // queue (see [1]).
-    l = last_ilabels.insert(make_pair(pl->first, -kaldi::kLogZeroBaseFloat)).first;
-    l->second = -kaldi::LogAdd(-l->second, -inc_cost);
-  }
-  // Total cost to this state, using any symbol
+    const double prev_cost, const double edge_cost,
+    const double threshold) {
+  const double old_cost = cost;
   cost = -kaldi::LogAdd(-cost, - (prev_cost + edge_cost));
   last_cost = -kaldi::LogAdd(-last_cost, -(prev_cost + edge_cost));
   return !kaldi::ApproxEqual(cost, old_cost, threshold);
 }
 
 
-void AccumulateToks(const TokenMap& toks, LabelMap *acc) {
-  KALDI_ASSERT(acc);
-  for (TokenMap::const_iterator t = toks.begin(); t != toks.end(); ++t) {
-    const LabelMap& lbls = t->second.ilabels;
-    for (LabelMap::const_iterator l = lbls.begin(); l != lbls.end(); ++l) {
-      if (l->second == -kaldi::kLogZeroBaseFloat) continue;
-      BaseFloat& x = acc->insert(make_pair(
-          l->first, -kaldi::kLogZeroBaseFloat)).first->second;
-      x = -kaldi::LogAdd(-x, -l->second);
-    }
-  }
-}
-
-
-void PruneToks(BaseFloat beam, TokenMap *toks) {
+void PruneToks(double beam, TokenMap *toks) {
   if (toks->empty()) {
     KALDI_VLOG(2) <<  "No tokens to prune.\n";
     return;
   }
   TokenMap::const_iterator tok = toks->begin();
   // Get best cost
-  BaseFloat best_cost = tok->second.cost;
+  double best_cost = tok->second.cost;
   for (++tok; tok != toks->end(); ++tok) {
     best_cost = std::min(best_cost, tok->second.cost);
   }
   // Mark all tokens with cost greater than the cutoff
   std::vector<TokenMap::const_iterator> remove_toks;
-  const BaseFloat cutoff = best_cost + beam;
+  const double cutoff = best_cost + beam;
   for (tok = toks->begin(); tok != toks->end(); ++tok) {
     if (tok->second.cost > cutoff) {
       remove_toks.push_back(tok);
@@ -85,49 +50,108 @@ void PruneToks(BaseFloat beam, TokenMap *toks) {
 }
 
 
-BaseFloat RescaleToks(TokenMap* toks) {
+double RescaleToks(TokenMap* toks) {
   // Compute scale constant
-  BaseFloat scale = -kaldi::kLogZeroBaseFloat;
+  double scale = -kaldi::kLogZeroDouble;
   for (TokenMap::iterator t = toks->begin(); t != toks->end(); ++t) {
     scale = -kaldi::LogAdd(-scale, -t->second.cost);
   }
   // Rescale tokens and labels
   for (TokenMap::iterator t = toks->begin(); t != toks->end(); ++t) {
     t->second.cost -= scale;
-    LabelMap* lbls = &t->second.ilabels;
-    for (LabelMap::iterator l = lbls->begin(); l != lbls->end(); ++l) {
-      l->second -= scale;
-    }
   }
   return scale;
 }
 
-void ComputePosteriorgram(
-    const std::vector<LabelMap>& fwd, const std::vector<LabelMap>& bkw,
+
+// Compute Likelihood of the observed sequence.
+// WARNING: This is not backward[0][Start], since epsilon transitions may exist!
+double ComputeLikelihood(const TokenMap& fwd0, const TokenMap& bkw0) {
+  double lkh_obs = kaldi::kLogZeroDouble;
+  for (TokenMap::const_iterator ftok = fwd0.begin(); ftok != fwd0.end();
+       ++ftok) {
+    TokenMap::const_iterator btok = bkw0.find(ftok->first);
+    const double& bc = btok != bkw0.end() ?
+        -btok->second.cost : kaldi::kLogZeroDouble;
+    const double& fc = -ftok->second.cost;
+    lkh_obs = kaldi::LogAdd(lkh_obs, fc + bc);
+  }
+  return lkh_obs;
+}
+
+
+void ComputeLabelsPosterior(
+    const fst::Fst<fst::StdArc>& fst,
+    const std::vector<TokenMap>& fwd,
+    const std::vector<TokenMap>& bkw,
+    DecodableInterface* decodable,
     std::vector<LabelMap>* pst) {
+  typedef fst::StdArc StdArc;
+  typedef fst::Fst<StdArc> Fst;
+  typedef fst::ArcIterator<Fst> ArcIterator;
+
   KALDI_ASSERT(fwd.size() == bkw.size());
+  KALDI_ASSERT(fwd.size() > 0);
   pst->clear();
-  pst->resize(fwd.size());
+  pst->resize(fwd.size() - 1);
+
   for (size_t t = 0; t < pst->size(); ++t) {
-    const LabelMap& f_t = fwd[t];
-    const LabelMap& b_t = bkw[t];
-    BaseFloat sum_t = kaldi::kLogZeroBaseFloat;
-    for (LabelMap::const_iterator f_l = f_t.begin(); f_l != f_t.end(); ++f_l) {
-      LabelMap::const_iterator b_l = b_t.find(f_l->first);
-      // Skip products that will result into 0
-      if (b_l == b_t.end() || f_l->second == -kaldi::kLogZeroBaseFloat ||
-          b_l->second == -kaldi::kLogZeroBaseFloat)
-        continue;
-      // Compute total cost and change the sign to transform it into a
-      // probability
-      const BaseFloat p = -(f_l->second + b_l->second);
-      (*pst)[t].insert(make_pair(f_l->first, p));
-      sum_t = kaldi::LogAdd(sum_t, p);
+    double sum = kaldi::kLogZeroDouble;
+    // Traverse all active states i, at time t
+    for (TokenMap::const_iterator ftok = fwd[t].begin(); ftok != fwd[t].end();
+         ++ftok) {
+      // Forward cost to state i, in time t
+      const double& fc = ftok->second.cost;
+      if (fc == -kaldi::kLogZeroDouble) continue;
+      // Traverse outgoing edges from state i, which emit some label
+      // WARNING: I am ignoring epsilon edges, since they do not correspond to
+      // any learnable transition-id.
+      for (ArcIterator aiter(fst, ftok->first); !aiter.Done(); aiter.Next()) {
+        const StdArc arc = aiter.Value();
+        const StateId j = arc.nextstate;
+        if (arc.ilabel == 0 || arc.weight == StdArc::Weight::Zero()) continue;
+        // Backward cost to state j, in time t + 1
+        TokenMap::const_iterator btok = bkw[t + 1].find(j);
+        if (btok == bkw[t + 1].end() ||
+            btok->second.cost == -kaldi::kLogZeroDouble) continue;
+        const double& bc = btok->second.cost;
+        // Acoustic cost of emiting current label at time t
+        const double acoustic_cost = -decodable->LogLikelihood(t, arc.ilabel);
+        if (acoustic_cost == -kaldi::kLogZeroDouble) continue;
+        // Update label likelihood, and total likelihood
+        double& logp = (*pst)[t].insert(make_pair(
+            arc.ilabel, kaldi::kLogZeroDouble)).first->second;
+        const double inc_p = -(fc + bc + arc.weight.Value() + acoustic_cost);
+        logp = kaldi::LogAdd(logp, inc_p);
+        sum = kaldi::LogAdd(sum, inc_p);
+      }
     }
-    for (LabelMap::iterator p_l = (*pst)[t].begin(); p_l != (*pst)[t].end();
-         ++p_l) {
-      p_l->second -= sum_t;
+    // Normalize label log-likelihood to get posteriors.
+    for (LabelMap::iterator it = (*pst)[t].begin(); it != (*pst)[t].end();
+         ++it) {
+      it->second -= sum;
     }
+  }
+}
+
+
+void PrintTokenMap(const TokenMap& toks, const string& name, int32 t) {
+  if (t < 0) {
+    for (TokenMap::const_iterator tk = toks.begin(); tk != toks.end(); ++tk) {
+      KALDI_LOG << name << "[" << tk->first << "] = " << tk->second.cost;
+    }
+  } else {
+    for (TokenMap::const_iterator tk = toks.begin(); tk != toks.end(); ++tk) {
+      KALDI_LOG << name << "[" << t << "," << tk->first << "] = "
+                << tk->second.cost;
+    }
+  }
+}
+
+
+void PrintTokenTable(const vector<TokenMap>& table, const string& name) {
+  for (size_t t = 0; t < table.size(); ++t) {
+    PrintTokenMap(table[t], name, t);
   }
 }
 

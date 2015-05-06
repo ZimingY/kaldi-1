@@ -23,21 +23,20 @@
 
 namespace kaldi {
 
+
 SimpleBackward::~SimpleBackward() {
-  curr_toks_.clear();
-  prev_toks_.clear();
+  backward_.clear();
 }
 
 
 void SimpleBackward::InitBackward(DecodableInterface *decodable) {
   // clean up from last time:
-  curr_toks_.clear();
-  prev_toks_.clear();
   backward_.clear();
   // initialize decoding:
+  backward_.push_back(TokenMap());
   for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
-    if (fst_.Final(siter.Value()) != -kaldi::kLogZeroBaseFloat) {
-      curr_toks_.insert(make_pair(
+    if (fst_.Final(siter.Value()) != -kaldi::kLogZeroDouble) {
+      backward_.back().insert(make_pair(
           siter.Value(), fst_.Final(siter.Value()).Value()));
     }
   }
@@ -54,29 +53,22 @@ void SimpleBackward::InitBackward(DecodableInterface *decodable) {
 bool SimpleBackward::Backward(DecodableInterface *decodable) {
   InitBackward(decodable);
   while(num_frames_decoded_ < decodable->NumFramesReady()) {
-    prev_toks_.clear();
-    curr_toks_.swap(prev_toks_);
+    backward_.push_back(TokenMap());
     ProcessEmitting(decodable);
     ProcessNonemitting();
-    PruneToks(beam_, &curr_toks_);
-    backward_.push_back(unordered_map<Label, BaseFloat>());
-    AccumulateToks(curr_toks_, &backward_.back());
-    for (TokenMap::const_iterator t = curr_toks_.begin(); t != curr_toks_.end(); ++t) {
-      std::cerr << "B[" << decodable->NumFramesReady() - num_frames_decoded_ + 1<< "," << t->first << "] = " << exp(-t->second.cost) << " (";
-      for (LabelMap::const_iterator l = t->second.ilabels.begin(); l != t->second.ilabels.end(); ++l) {
-        std::cerr << " " << l->first << ":" << exp(-l->second);
-      }
-      std::cerr << " )" << std::endl;
-    }
+    PruneToks(beam_, &backward_.back());
   }
+  // Reverse backward matrix [T, T-1, ..., 1] -> [1, ..., T-1, T]
   std::reverse(backward_.begin(), backward_.end());
-  return (!curr_toks_.empty());
+  return (!backward_.front().empty());
 }
 
 
 void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
   // Processes emitting arcs for one frame.  Propagates from prev_toks_ to
   // curr_toks_.
+  const TokenMap& prev_toks_ = backward_[backward_.size() - 2];
+  TokenMap& curr_toks_ = backward_.back();
   const int32 frame = decodable->NumFramesReady() - num_frames_decoded_ - 1;
   for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
     const StateId state = siter.Value();
@@ -85,12 +77,12 @@ void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
       TokenMap::const_iterator ptok = prev_toks_.find(arc.nextstate);
       if (arc.ilabel == 0 || ptok == prev_toks_.end())
         continue;
-      const BaseFloat acoustic_cost =
+      const double acoustic_cost =
           -decodable->LogLikelihood(frame, arc.ilabel);
       Token& ctok = curr_toks_.insert(make_pair(
-          state, Token(-kaldi::kLogZeroBaseFloat))).first->second;
+          state, Token(-kaldi::kLogZeroDouble))).first->second;
       ctok.UpdateEmitting(
-          arc.ilabel, ptok->second.cost, arc.weight.Value(), acoustic_cost);
+          ptok->second.cost, arc.weight.Value(), acoustic_cost);
     }
   }
   num_frames_decoded_++;
@@ -100,12 +92,12 @@ void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
 void SimpleBackward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
   // curr_toks_.
+  TokenMap& curr_toks_ = backward_.back();
   QueueSet<StateId> queue_set;
   for (TokenMap::iterator tok = curr_toks_.begin();
        tok != curr_toks_.end(); ++tok) {
     queue_set.push(tok->first);
     tok->second.last_cost = tok->second.cost;
-    tok->second.last_ilabels = tok->second.ilabels;
   }
 
   while (!queue_set.empty()) {
@@ -113,10 +105,8 @@ void SimpleBackward::ProcessNonemitting() {
     queue_set.pop();
 
     Token& ptok = curr_toks_.find(state)->second;
-    const BaseFloat last_cost = ptok.last_cost;
-    const LabelMap last_cost_labels = ptok.last_ilabels;
-    ptok.last_cost = -kaldi::kLogZeroBaseFloat;
-    ptok.last_ilabels.clear();
+    const double last_cost = ptok.last_cost;
+    ptok.last_cost = -kaldi::kLogZeroDouble;
 
     for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
       for (ArcIterator aiter(fst_, siter.Value()); !aiter.Done();
@@ -124,9 +114,8 @@ void SimpleBackward::ProcessNonemitting() {
         const StdArc& arc = aiter.Value();
         if (arc.ilabel != 0 || arc.nextstate != state) continue;
         Token& ctok = curr_toks_.insert(make_pair(
-            siter.Value(), Token(-kaldi::kLogZeroBaseFloat))).first->second;
-        if (ctok.UpdateNonEmitting(
-                last_cost_labels, last_cost, arc.weight.Value(), delta_)) {
+            siter.Value(), Token(-kaldi::kLogZeroDouble))).first->second;
+        if (ctok.UpdateNonEmitting(last_cost, arc.weight.Value(), delta_)) {
           queue_set.push(siter.Value());
         }
       }
@@ -135,19 +124,15 @@ void SimpleBackward::ProcessNonemitting() {
 }
 
 
-BaseFloat SimpleBackward::TotalCost() const {
-  TokenMap::const_iterator tok = curr_toks_.find(fst_.Start());
-  const BaseFloat total_cost =
-      tok == curr_toks_.end() ? -kaldi::kLogZeroBaseFloat : tok->second.cost;
-  if (total_cost != total_cost) { // NaN. This shouldn't happen; it indicates
-                                  // some kind of error, most likely.
-    KALDI_WARN << "Found NaN (likely failure in decoding)";
-    return -kaldi::kLogZeroBaseFloat;
+double SimpleBackward::TotalCost() const {
+  double total_cost = -kaldi::kLogZeroDouble;
+  if (fst_.Start() != fst::kNoStateId) {
+    TokenMap::const_iterator tok = backward_.front().find(fst_.Start());
+    total_cost = tok == backward_.front().end() ?
+        -kaldi::kLogZeroDouble : tok->second.cost;
   }
   return total_cost;
 }
-
-
 
 
 } // end namespace kaldi.

@@ -80,7 +80,8 @@ int main(int argc, char *argv[]) {
           ++num_err;
           continue;
         }
-        const double lkh = -forwarder.TotalCost();
+        const double lkh = ComputeLikelihood(
+            forwarder.GetTable()[0], backwarder.GetTable()[0]);
         const int64 nfrm = forwarder.NumFramesDecoded();
 #ifdef KALDI_PARANOID
         KALDI_ASSERT(forwarder.NumFramesDecoded() ==
@@ -97,8 +98,9 @@ int main(int argc, char *argv[]) {
         ++num_done;
 
         std::vector<LabelMap> pst_map;
-        ComputePosteriorgram(
-            forwarder.GetTable(), backwarder.GetTable(), &pst_map);
+        ComputeLabelsPosterior(
+            fst, forwarder.GetTable(), backwarder.GetTable(), &gmm_decodable,
+            &pst_map);
         Posterior pst(pst_map.size());
         for (size_t t = 0; t < pst.size(); ++t) {
           for(LabelMap::const_iterator l = pst_map[t].begin();
