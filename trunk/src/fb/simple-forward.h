@@ -21,9 +21,7 @@
 #define KALDI_FB_SIMPLE_FORWARD_H_
 
 #include "fst/fstlib.h"
-#include "hmm/posterior.h"
 #include "itf/decodable-itf.h"
-#include "lat/kaldi-lattice.h"
 #include "util/stl-utils.h"
 #include "fb/simple-common.h"
 
