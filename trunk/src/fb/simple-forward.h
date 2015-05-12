@@ -34,6 +34,7 @@ class SimpleForward {
   typedef StdArc::StateId StateId;
   typedef fst::Fst<StdArc> Fst;
   typedef fst::ArcIterator<Fst> ArcIterator;
+  typedef fst::StateIterator<Fst> StateIterator;
 
   SimpleForward(const Fst &fst, double beam, double delta) :
       fst_(fst), beam_(beam), delta_(delta) { }
@@ -69,12 +70,17 @@ class SimpleForward {
   void ProcessEmitting(DecodableInterface *decodable);
   void ProcessNonemitting();
 
+  void CheckEpsilonArcs();
+
   vector<TokenMap> forward_;
   vector<double> scale_factor_;
   const Fst &fst_;
   double beam_;
   double delta_;
   int32 num_frames_decoded_;
+
+  unordered_map<StateId, bool> state_with_epsilon_arc_;
+  bool wfst_with_epsilon_arc_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleForward);
 };

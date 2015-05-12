@@ -46,6 +46,7 @@ void SimpleBackward::InitBackward(DecodableInterface *decodable) {
   KALDI_ASSERT(decodable->NumFramesReady() >= 0);
   KALDI_ASSERT(decodable->IsLastFrame(decodable->NumFramesReady() - 1));
   num_frames_decoded_ = 0;
+  CheckEpsilonArcs();
   ProcessNonemitting();
 }
 
@@ -92,10 +93,12 @@ void SimpleBackward::ProcessEmitting(DecodableInterface *decodable) {
 void SimpleBackward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
   // curr_toks_.
+  if (!wfst_with_epsilon_arc_) return;
   TokenMap& curr_toks_ = backward_.back();
   QueueSet<StateId> queue_set;
   for (TokenMap::iterator tok = curr_toks_.begin();
        tok != curr_toks_.end(); ++tok) {
+    if (!state_with_epsilon_arc_[tok->first]) continue;
     queue_set.push(tok->first);
     tok->second.last_cost = tok->second.cost;
   }
@@ -132,6 +135,24 @@ double SimpleBackward::TotalCost() const {
         -kaldi::kLogZeroDouble : tok->second.cost;
   }
   return total_cost;
+}
+
+
+void SimpleBackward::CheckEpsilonArcs() {
+  wfst_with_epsilon_arc_ = false;
+  for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+    state_with_epsilon_arc_[siter.Value()] = false;
+  }
+
+  for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+    for (ArcIterator aiter(fst_, siter.Value()); !aiter.Done(); aiter.Next()) {
+      if (aiter.Value().ilabel == 0) {
+        state_with_epsilon_arc_[aiter.Value().nextstate] = true;
+        wfst_with_epsilon_arc_ = true;
+        break;
+      }
+    }
+  }
 }
 
 

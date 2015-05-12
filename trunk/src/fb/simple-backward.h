@@ -70,12 +70,17 @@ class SimpleBackward {
   void ProcessEmitting(DecodableInterface *decodable);
   void ProcessNonemitting();
 
+  void CheckEpsilonArcs();
+
   vector<TokenMap> backward_;
   vector<double> scale_factor_;
   const Fst &fst_;
   double beam_;
   double delta_;
   int32 num_frames_decoded_;
+
+  unordered_map<StateId, bool> state_with_epsilon_arc_;
+  bool wfst_with_epsilon_arc_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(SimpleBackward);
 };

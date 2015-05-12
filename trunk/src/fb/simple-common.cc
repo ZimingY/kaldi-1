@@ -50,6 +50,44 @@ void PruneToks(double beam, TokenMap *toks) {
 }
 
 
+void PruneToksForwardBackward(
+    double lkh, double beam, TokenMap *fwd, TokenMap *bkw) {
+  if (fwd->empty() && bkw->empty()) {
+    KALDI_VLOG(2) <<  "No tokens to prune.\n";
+    return;
+  } else if (fwd->empty() || bkw->empty()) {
+    KALDI_WARN << "All tokens were pruned! "
+               << "Forward = " << fwd->size() << " tokens, "
+               << "Backward = " << bkw->size() << " tokens. "
+               << "This probably means your beam is to narrow.";
+    fwd->clear();
+    bkw->clear();
+    return;
+  }
+  // Mark all tokens with likelihood greater than the cutoff
+  std::vector<TokenMap::const_iterator> remove_toks_fwd;
+  std::vector<TokenMap::const_iterator> remove_toks_bkw;
+  const double cutoff = lkh + beam;
+  for (TokenMap::const_iterator ftok = fwd->begin(); ftok != fwd->end();
+       ++ftok) {
+    TokenMap::const_iterator btok = bkw->find(ftok->first);
+    const double cost = btok != bkw->end() ?
+        ftok->second.cost + btok->second.cost : -kaldi::kLogZeroDouble;
+    if (cost > cutoff) {
+      remove_toks_fwd.push_back(ftok);
+      remove_toks_bkw.push_back(btok);
+    }
+  }
+  // Prune tokens
+  for (size_t i = 0; i < remove_toks_fwd.size(); ++i) {
+    fwd->erase(remove_toks_fwd[i]);
+    bkw->erase(remove_toks_bkw[i]);
+  }
+  KALDI_VLOG(2) <<  "Pruned " << remove_toks_fwd.size() << " to "
+                << fwd->size() << " toks.\n";
+}
+
+
 double RescaleToks(TokenMap* toks) {
   // Compute scale constant
   double scale = -kaldi::kLogZeroDouble;
@@ -131,6 +169,53 @@ void ComputeLabelsPosterior(
          ++it) {
       it->second -= sum;
     }
+  }
+}
+
+
+void ComputeLabelsPosteriorAtTimeT(
+    const fst::Fst<fst::StdArc>& fst,
+    const TokenMap& fwd_t,
+    const TokenMap& bkw_tp1,
+    const int32 t,
+    DecodableInterface* decodable,
+    LabelMap* pst) {
+  typedef fst::StdArc StdArc;
+  typedef fst::Fst<StdArc> Fst;
+  typedef fst::ArcIterator<Fst> ArcIterator;
+  pst->clear();
+  // At the end, this should be total likelihood - likelihood of epsilon arcs
+  double sum = kaldi::kLogZeroDouble;
+  // Process all tokens at time t, from the forward and backward passes
+  for (TokenMap::const_iterator ftok = fwd_t.begin(); ftok != fwd_t.end();
+       ++ftok) {
+    // Forward cost to state i, in time t
+    const double& fc = ftok->second.cost;
+    if (fc == -kaldi::kLogZeroDouble) continue;
+    // Traverse outgoing edges from state i, which emit some label
+    for (ArcIterator aiter(fst, ftok->first); !aiter.Done(); aiter.Next()) {
+      const StdArc arc = aiter.Value();
+      const StateId j = arc.nextstate;
+      if (arc.ilabel == 0 || arc.weight == StdArc::Weight::Zero()) continue;
+      // Backward cost to state j, in time t + 1
+      TokenMap::const_iterator btok = bkw_tp1.find(j);
+      if (btok == bkw_tp1.end() ||
+          btok->second.cost == -kaldi::kLogZeroDouble) continue;
+      const double& bc = btok->second.cost;
+      // Acoustic cost of emiting current label at time t
+      const double acoustic_cost = -decodable->LogLikelihood(t, arc.ilabel);
+      if (acoustic_cost == -kaldi::kLogZeroDouble) continue;
+      // Update label likelihood, and total likelihood
+      double& logp = pst->insert(make_pair(
+          arc.ilabel, kaldi::kLogZeroDouble)).first->second;
+      const double inc_p = -(fc + bc + arc.weight.Value() + acoustic_cost);
+      logp = kaldi::LogAdd(logp, inc_p);
+      sum = kaldi::LogAdd(sum, inc_p);
+    }
+  }
+  // Normalize label log-likelihood to get posteriors.
+  for (LabelMap::iterator it = pst->begin(); it != pst->end(); ++it) {
+    it->second -= sum;
   }
 }
 

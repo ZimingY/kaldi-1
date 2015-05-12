@@ -38,6 +38,7 @@ void SimpleForward::InitForward() {
     forward_.back().insert(make_pair(start_state, 0.0));
   }
   num_frames_decoded_ = 0;
+  CheckEpsilonArcs();
   ProcessNonemitting();
 }
 
@@ -83,10 +84,12 @@ void SimpleForward::ProcessEmitting(DecodableInterface *decodable) {
 void SimpleForward::ProcessNonemitting() {
   // Processes nonemitting arcs for one frame.  Propagates within
   // curr_toks_.
+  if (!wfst_with_epsilon_arc_) return;
   TokenMap& curr_toks_ = forward_.back();
   QueueSet<StateId> queue_set;
   for (TokenMap::iterator tok = curr_toks_.begin();
        tok != curr_toks_.end(); ++tok) {
+    if (!state_with_epsilon_arc_[tok->first]) continue;
     queue_set.push(tok->first);
     tok->second.last_cost = tok->second.cost;
   }
@@ -127,6 +130,21 @@ double SimpleForward::TotalCost() const {
     total_cost = -kaldi::kLogZeroDouble;
   }
   return total_cost;
+}
+
+
+void SimpleForward::CheckEpsilonArcs() {
+  wfst_with_epsilon_arc_ = false;
+  for (StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+    state_with_epsilon_arc_[siter.Value()] = false;
+    for (ArcIterator aiter(fst_, siter.Value()); !aiter.Done(); aiter.Next()) {
+      if (aiter.Value().ilabel == 0) {
+        state_with_epsilon_arc_[siter.Value()] = true;
+        wfst_with_epsilon_arc_ = true;
+        break;
+      }
+    }
+  }
 }
 
 

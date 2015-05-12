@@ -7,9 +7,7 @@
 #include "gmm/decodable-am-diag-gmm.h"
 
 #include "fb/simple-common.h"
-#include "fb/simple-forward.h"
-#include "fb/simple-backward.h"
-
+#include "fb/simple-forward-backward.h"
 
 int main(int argc, char *argv[]) {
   try {
@@ -22,14 +20,18 @@ int main(int argc, char *argv[]) {
         "gmm-fb-compiled 1.mdl ark:graphs.fsts scp:train.scp ark:1.psts.ark\n";
 
     ParseOptions po(usage);
-    BaseFloat beam = std::numeric_limits<BaseFloat>::infinity();
+    BaseFloat beam_fwd = std::numeric_limits<BaseFloat>::infinity();
+    BaseFloat beam_bkw = std::numeric_limits<BaseFloat>::infinity();
     BaseFloat delta = 0.000976562; // same delta as in fstshortestdistance
     BaseFloat acoustic_scale = 1.0;
     BaseFloat transition_scale = 1.0;
     BaseFloat self_loop_scale = 1.0;
 
-    po.Register("beam", &beam, "Beam prunning threshold");
-    po.Register("delta", &delta, "Comparison delta (see fstshortestdistance)");
+    po.Register("beam-backward", &beam_bkw, "Beam prunning threshold during "
+                "backward pass [sensitive, use a wide beam]");
+    po.Register("beam-forward", &beam_fwd, "Beam prunning threshold during "
+                "forward pass [non-sensitive, can use a narrow beam]");
+    po.Register("delta", &delta, "Comparison delta [see fstshortestdistance]");
     po.Register("transition-scale", &transition_scale,
                 "Transition-probability scale [relative to acoustics]");
     po.Register("acoustic-scale", &acoustic_scale,
@@ -85,43 +87,23 @@ int main(int argc, char *argv[]) {
                              &fst);
         }
 
-        SimpleForward forwarder(fst, beam, delta);
-        SimpleBackward backwarder(fst, beam, delta);
+        SimpleForwardBackward fb(fst, beam_bkw, beam_fwd, delta);
         DecodableAmDiagGmm gmm_decodable(am_gmm, trans_model, features);
 
-        if (!forwarder.Forward(&gmm_decodable)) {
-          KALDI_WARN << "Forward did not reach any final state for utt "
-                     << utt;
+        if (!fb.ForwardBackward(&gmm_decodable)) {
+          KALDI_WARN << "Forward-Backward failed for utt " << utt;
           ++num_err;
           continue;
         }
-        if (!backwarder.Backward(&gmm_decodable)) {
-          KALDI_WARN << "Backward did not reach the start state for utt "
-                     << utt;
-          ++num_err;
-          continue;
-        }
-        const double lkh = ComputeLikelihood(
-            forwarder.GetTable()[0], backwarder.GetTable()[0]);
-        const int64 nfrm = forwarder.NumFramesDecoded();
-#ifdef KALDI_PARANOID
-        KALDI_ASSERT(forwarder.NumFramesDecoded() ==
-                     backwarder.NumFramesDecoded());
-        KALDI_ASSERT(forwarder.GetTable().size() ==
-                     backwarder.GetTable().size());
-        const double lkh_back = -backwarder.TotalCost();
-        kaldi::AssertEqual(lkh, lkh_back);
-#endif
+        const double lkh = fb.LogLikelihood();
+        const int64 nfrm = fb.NumFramesDecoded();
         KALDI_LOG << "Processing Data: " << utt;
         KALDI_LOG << "Utterance prob per frame = " << (lkh / nfrm);
         tot_like += lkh;
         frame_count += nfrm;
         ++num_done;
 
-        std::vector<LabelMap> pst_map;
-        ComputeLabelsPosterior(
-            fst, forwarder.GetTable(), backwarder.GetTable(), &gmm_decodable,
-            &pst_map);
+        const std::vector<LabelMap>& pst_map = fb.LabelPosteriors();
         Posterior pst(pst_map.size());
         for (size_t t = 0; t < pst.size(); ++t) {
           for(LabelMap::const_iterator l = pst_map[t].begin();

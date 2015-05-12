@@ -56,6 +56,11 @@ typedef unordered_map<StateId, Token> TokenMap;
 /// the minimum cost + the beam.
 void PruneToks(double beam, TokenMap *toks);
 
+/// Prune all tokens (states) from the forward and backward passes whose
+/// cost is larger than the total likelihood + the beam.
+void PruneToksForwardBackward(
+    double lkh, double beam, TokenMap *fwd, TokenMap *bkw);
+
 /// Rescale all tokens, such that the log-sum of the costs is 0.0 (1.0)
 double RescaleToks(TokenMap* toks);
 
@@ -73,6 +78,22 @@ void ComputeLabelsPosterior(
     const std::vector<TokenMap>& bkw,
     DecodableInterface* decodable,
     std::vector<LabelMap>* pst);
+
+
+/// Compute label (typically transition-ids) posteriors at time t.
+/// Useful to cumpte the label posteriors iteratively without having full
+/// forward and backward trellis in memory.
+/// The posteriors can be used for the EM-reestimation of the
+/// transition/emission probabilities.
+/// NOTE: This ignores epsilon arcs, since I am assuming epsilon arcs weights
+/// are not tuneable (the do not correspond to any transition-id).
+void ComputeLabelsPosteriorAtTimeT(
+    const fst::Fst<fst::StdArc>& fst,
+    const TokenMap& fwd_t,
+    const TokenMap& bkw_tp1,
+    const int32 t,
+    DecodableInterface* decodable,
+    LabelMap* pst);
 
 /// Debug utils.
 void PrintTokenMap(const TokenMap& toks, const string& name = "", int32 t = -1);
