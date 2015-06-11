@@ -4,10 +4,10 @@ EXTRA_CXXFLAGS = -Wno-sign-compare -O3
 include ../kaldi.mk
 
 TESTFILES = simple-forward-test simple-backward-test simple-posteriors-test \
-	simple-forward-backward-test
+	simple-forward-backward-test fast-forward-backward-test
 
 OBJFILES = simple-forward-backward.o simple-forward.o simple-backward.o \
-	simple-common.o test-common.o
+	simple-common.o fast-forward-backward.o test-common.o
 
 LIBNAME = kaldi-fb
 
