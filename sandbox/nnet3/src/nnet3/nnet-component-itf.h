@@ -64,6 +64,11 @@ enum ComponentProperties {
                            // setting, its output.  The Component chooses
                            // whether to add or set, and the calling code has to
                            // accommodate it.
+  kModifiesIndexes = 0x400,  // true if the ModifyIndexes function might modify
+                            // the indexes.
+  kAllowNoOptionalDependencies = 0x800  // true if we are to treat a Cindex as
+                                 // computable even if no optional dependencies
+                                 // were computable.
 };
 
 
@@ -150,7 +155,7 @@ class Component {
   ///
   /// The default implementation of this function is suitable for any
   /// SimpleComponent; it just copies the output_index to a single identical
-  /// element in input_indexes, leaving is_optional empty.
+  /// element in input_indexes, and sets is_optional to false.
   virtual void GetInputIndexes(const MiscComputationInfo &misc_info,
                                const Index &output_index,
                                std::vector<Index> *input_indexes,
@@ -159,6 +164,7 @@ class Component {
   /// \brief (For non-simple Components) Returns some precomputed
   ///     component-specific and computation-specific indexes to be in used
   ///     in the Propagate and Backprop functions.
+  ///
   /// \param [in] misc_info  This argument is supplied to handle things that the
   ///       framework can't very easily supply: information like which time
   ///       indexes are needed for AggregateComponent, which time-indexes are
@@ -172,14 +178,33 @@ class Component {
   ///       what time-indexes (and other indexes) each row of the
   ///       out/out_value/out_deriv matrices given to Propagate and Backprop will
   ///       mean.
+  /// \param [in] need_backprop  True if we might need to do backprop
+  ///       with this component, so that if any different indexes are needed
+  ///       for backprop then those should be computed too.
   /// \return  Returns a child-class of class ComponentPrecomputedIndexes, or
   ///       NULL if this component for does not need to precompute any indexes
   ///       (e.g. if it is a simple component and does not care about indexes).
   virtual ComponentPrecomputedIndexes* PrecomputeIndexes(
       const MiscComputationInfo &misc_info,
       const std::vector<Index> &input_indexes,
-      std::vector<Index> &output_indexes,
+      const std::vector<Index> &output_indexes,
       bool need_backprop) const { return NULL;  }
+
+
+  /// \brief (for non-simple Components)
+  /// This function provides an opportunity for a Component to reorder the
+  /// indexes at its input and output and possibly remove some of the indexes at
+  /// its input that (after considering what else is available) it decides that
+  /// it does not need.  This might be useful, for instance, if a component
+  /// requires a particular ordering of the indexes that doesn't correspond to
+  /// their natural ordering.   Components that might modify the indexes are
+  /// required to return the kModifiesIndexes flag in their Properties().
+  ///
+  ///  \param [in,out]  Indexes at the input of the Component.
+  ///  \param [in,out]  Indexes at the output of the Component
+  virtual void ModifyIndexes(std::vector<Index> *input_indexes,
+                             std::vector<Index> *output_indexes) const {}
+  
 
   /// \brief Returns a string such as "SigmoidComponent", describing
   ///        the type of the object.

@@ -32,21 +32,35 @@
 #include <vector>
 #include <map>
 
-
 namespace kaldi {
 namespace nnet3 {
 
-// NetworkNode is used to represent, in a neural net, either an input of the
-// network, an output of the network, an input to a Component, or an instance of
-// a Component.
-// Note: for each instance of a component in the network, there are always
-// two nodes one of type kComponentInput and one of type kComponent, and the
-// kComponent comes directly after the corresponding kComponentInput.  So the
-// input to a component always comes from the network-node directly before it.
+/// NetworkNode is used to represent, three types of thing: either an input of the
+/// network (which pretty much just states the dimension of the input vector);
+/// a Component (e.g. an affine component or a sigmoid component); or a Descriptor.
+/// A Descriptor is basically an expression that can do things like append
+/// the outputs of other components (or inputs) together, add them together, and
+/// do various other things like shifting the time index.
+///
+/// Each Component must have an input of type kDescriptor that is numbered
+/// preceding to the Component, and that is not used elsewhere.  This may seem
+/// unintuitive but it makes the implementation a lot easier; any apparent waste
+/// can be optimized out after compilation.  And outputs must also be of type
+/// kDescriptor.
+///
+/// Note: in the actual computation you can provide input not only to nodes of
+/// type kInput but also to nodes of type kComponent; this is useful in things
+/// like recurrent nets where you may want to split the computation up into
+/// pieces.
+///
+/// Note that in the config-file format, there are three types of node: input,
+/// component and output.  output maps to kDescriptor, but the nodes of type
+/// kDescriptor that represent the input to a component, are described in the
+/// same config-file line as the Component itself.
 struct NetworkNode {
-  enum NodeType { kInput, kOutput, kComponent, kComponentInput } node_type;
+  enum NodeType { kInput, kDescriptor, kComponent } node_type;
 
-  // This is relevant only for kOutput and kComponentInput.  It describes which
+  // This is relevant only for nodes of type kDescriptor.  It describes which
   // other network nodes it gets its input from, and how those inputs are
   // combined together; see type Descriptor in nnet-descriptor.h for
   // details.
@@ -61,17 +75,19 @@ struct NetworkNode {
     int32 dim;
   } u;
   
-  int32 Dim(const Nnet &nnet);  // Dimension that this node outputs.
+  int32 Dim(const Nnet &nnet) const;  // Dimension that this node outputs.
 };
 
 
 
 class Nnet {
  public:
-  int32 NumComponents() { return components_.size(); }
+  void Init(std::istream &config_file);
+  
+  int32 NumComponents() const { return components_.size(); }
 
-  int32 NumNodes() { return nodes_.size(); }
-
+  int32 NumNodes() const { return nodes_.size(); }
+  
   /// return component indexed c.  not a copy; not owned by caller.
   Component *GetComponent(int32 c);
 
@@ -82,8 +98,12 @@ class Nnet {
   /// returns const reference to a particular numbered network node.
   const NetworkNode &GetNode(int32 node) const;
 
+  /// Returns true if this is an output node, meaning that it is of type kDescriptor
+  /// and is not directly followed by a node of type kComponent.
+  bool IsOutput(int32 node) const;
+
   /// returns vector of node names (needed by some parsing code, for instance).
-  const std::vector<std::string> &GetNodeNames() { return node_names_; }
+  const std::vector<std::string> &GetNodeNames() const { return node_names_; }
 
   // returns index associated with this node name, or -1 if no such index.
   int32 IndexOfNode(const std::string &node_name) const;
@@ -91,6 +111,16 @@ class Nnet {
   void Read(std::istream &istream, bool binary);
 
   void Write(std::ostream &ostream, bool binary) const;
+
+  /// note to self: one thing of many that we need to check is that no output
+  /// nodes are referred to in Descriptors.  This might mess up the combination
+  /// of each output node into a single step, as dependencies would be messed
+  /// up.
+  void Check()const;
+
+  /// returns some human-readable information about the network, mostly for
+  /// debugging purposes.
+  std::string Info() const;
  private:
   // the names of the components of the network.  Note, these may be distinct
   // from the network node names below (and live in a different namespace); the
@@ -109,7 +139,7 @@ class Nnet {
   // foo, because the input to a component always gets its own NetworkNode index.
   std::vector<std::string> node_names_;
 
-  // the network nodes.
+  // the network nodes of the network.
   std::vector<NetworkNode> nodes_;
   
 };

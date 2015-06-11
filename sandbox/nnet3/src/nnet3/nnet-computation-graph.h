@@ -29,16 +29,26 @@
 namespace kaldi {
 namespace nnet3 {
 
-// The first step in compilation is to turn the ComputationSpecification
-// into a ComputationGraph, where for each Cindex we have a list of
-// other Cindexes that it depends on, and compute the shortest distance to
-// the input.
+/// The first step in compilation is to turn the ComputationSpecification
+/// into a ComputationGraph, where for each Cindex we have a list of
+/// other Cindexes that it depends on.  Various manipulations of the computation
+/// use the ComputationGraph representation.
+/// 
+/// For efficiency, we give each Cindex its own integer identifier, called a
+/// "cindex_id".  A cindex_id is only interpretable relative to a
+/// ComputationGraph; it's an index into the "cindexes" array of the
+/// ComputationGraph.  The GetCindexId functions perform the reverse mapping.
 struct ComputationGraph {
 
-  // This is the reverse mapping of cindex_to_cindex_id: it maps from cindex_id
-  // to Cindex.
+  // This is the mapping of cindex_id to Cindex.
   std::vector<Cindex> cindexes;
-  
+
+  // For each Cindex this tells us whether it is an input to the network.  This
+  // would not be necessary if we didn't allow the outputs of Components to be
+  // supplied as inputs [this may be useful for things like RNNs if we want to
+  // do the computation piece by piece].
+  std::vector<bool> is_input;
+
   // dependencies[cindex_id] gives you the list of other cindex_ids that this
   // particular cindex_id directly depends on to compute it.
   std::vector<std::vector<int32> > dependencies;
@@ -56,14 +66,15 @@ struct ComputationGraph {
   // will set this to the empty vector.
   std::vector<std::vector<bool> > optional;
 
-  // Maps a Cindex to an integer cindex_id.  If not present, then add it and set
+  // Maps a Cindex to an integer cindex_id.  If not present, then add it (with
+  // the corresponding "is_input" flag set to the value "input") and set
   // *is_new to true.  If present, set is_new to false and return the existing
   // cindex_id.
-  int32 GetCindexId(Cindex cindex, bool *is_new);
+  int32 GetCindexId(const Cindex &cindex, bool input, bool *is_new);
 
   // Const version of the above. Accepts no bool argument; it will return -1 if
   // the Cindex is not present, and the user should check for this.
-  int32 GetCindexId(Cindex cindex) const;
+  int32 GetCindexId(const Cindex &cindex) const;
 
   // This function renumbers the cindex-ids, keeping only for which keep[c] is
   // true.  Note, it first asserts that the optional array is empty as it does
@@ -93,28 +104,49 @@ void ComputeComputationGraph(const Nnet &nnet,
 /// Cindexes if we have Components optional dependencies (i.e. we are using some
 /// non-simple Components that list some dependencies as optional).  It is an
 /// error if the output cannot be computed from the input.
-void PruneComputationGraph(const Nnet &nnet,
-                           const ComputationRequest &computation_request,
-                           ComputationGraph *computation_graph);
+void PruneComputationGraph(
+    const Nnet &nnet,
+    const ComputationRequest &computation_request,
+    ComputationGraph *computation_graph);
+
 
 
 /// Compute the order in which we can compute each cindex in the computation.
-/// This is 0 for input cindexes, and in general order n for any cindex that can
-/// be computed immediately from cindexes less than n.  It is an error if some
-/// cindexes cannot be computed (we assume that you have called
+/// each cindex will map to an order-index.  The order-index is 0 for input
+/// cindexes, and in general is n for any cindex that can be computed
+/// immediately from cindexes with order-index less than n.  It is an error if
+/// some cindexes cannot be computed (we assume that you have called
 /// PruneComputationGraph before this function).  If the "order" parameter is
-/// non-NULL, it will output a vector giving the order for each cindex_id.  If
-/// the "by_order" parameter is non-NULL, it will output for each order 0, 1 and
-/// so on, a vector of sorted cindex_ids that have that order.
+/// non-NULL, it will output to "order" a vector mapping cindex_id to
+/// order-index.  If the "by_order" parameter is non-NULL, it will output for
+/// each order-index 0, 1 and so on, a sorted vector of cindex_ids that have
+/// that order-index.
 void ComputeComputationOrder(
     const Nnet &nnet,
-    const ComputationRequest &request,
     const ComputationGraph &computation_graph,
-    const std::vector<int32> &shortest_distance,
     std::vector<int32> *order,
     std::vector<std::vector<int32> > *by_order);
 
 
+/// Once the computation order has been computed by ComputeComputationOrder,
+/// this function computes the "steps" of the computation.  These differ because
+/// if there are cindexes with a particular order-index and different node-ids
+/// (i.e. they belong to different nodes of the nnet), they need to be separated
+/// into different steps.  Also, if the cindexes for a particular output node are
+/// computed in multiple steps, they are all combined into a single step whose
+/// numbering is the same as the last of the steps.  [we'll later delete the other
+/// unnecessary steps].
+///
+/// Also this function makes sure that the order of cindex_ids in each step is
+/// correct.  For steps corresponding to input and output nodes, this means that
+/// the order is the same as specified in the ComputationRequest; for other
+/// steps, it means that they are sorted using the order of struct Index.
+void ComputeComputationSteps(
+    const Nnet &nnet,
+    const ComputationRequest &request,
+    const ComputationGraph &computation_graph,
+    const std::vector<std::vector<int32> > &by_order,
+    std::vector<std::vector<int32> > *by_step);
 
 
 } // namespace nnet3

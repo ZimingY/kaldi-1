@@ -38,6 +38,8 @@ struct NnetOptimizeConfig {
 };
 
 
+// this was a very early draft.  could end up completely changed.  I'll leave this till
+// last as it's not essential to get the framework working.
 class NnetOptimize {
  public:
   NnetOptimize(NnetComputation *computation);
@@ -72,25 +74,25 @@ class NnetOptimize {
     // list of commands that reference this index or others in
     // "overlapping_sub_matrices".
     std::vector<int32> commands;
-
     
-    std::vector<int32> writing_commands;
-
     std::vector<int32> writing_commands;
     
     // list of sub-matrix indexes corresponding to this matrix.
     std::vector<int32> sub_matrices;
+  };
+
+  struct StepOptInfo {
   };
   
   NnetComputation *computation_;
 
   std::vector<MatrixOptInfo> matrix_info_;
 
-  std::vector<SubmatrixOptInfo> matrix_info_;
+  std::vector<SubmatrixOptInfo> submatrix_info_;
   
   std::vector<StepOptInfo> step_info_;
 
-
+};
 
   
 /*
@@ -160,6 +162,7 @@ class NnetOptimize {
        - renumber Matrices to get rid of zero-sized, un-needed ones, and a similar thing for Sub-matrices.
        - renumber Computations to get rid of no-ops introduced by earlier optimizations
          [also, modify forward_computation_end].
+       - maybe renumber Indexes to get rid of duplicates.
 
   (9) optimizations to replace row-by-row copy and add commands with whole-matrix
       commands on smaller sub-matrices (if the row-by-row copy commands have certain

@@ -15,9 +15,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include <iterator>
-#include <sstream>
-#include "nnet3/nnet-compile.h"
+#include "nnet3/nnet-optimize.h"
 
 namespace kaldi {
 namespace nnet3 {

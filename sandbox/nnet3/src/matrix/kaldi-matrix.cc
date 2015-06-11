@@ -1423,6 +1423,15 @@ SubMatrix<Real>::SubMatrix(const MatrixBase<Real> &M,
                            const MatrixIndexT r,
                            const MatrixIndexT co,
                            const MatrixIndexT c) {
+  if (r == 0 || c == 0) {
+    // we support the empty sub-matrix as a special case.
+    KALDI_ASSERT(c == 0 && r == 0);
+    this->data_ = NULL;
+    this->num_cols_ = 0;    
+    this->num_rows_ = 0;
+    this->stride_ = 0;
+    return;
+  }
   KALDI_ASSERT(static_cast<UnsignedMatrixIndexT>(ro) <
                static_cast<UnsignedMatrixIndexT>(M.num_rows_) &&
                static_cast<UnsignedMatrixIndexT>(co) <
@@ -2507,18 +2516,16 @@ void MatrixBase<Real>::GroupPnorm(const MatrixBase<Real> &src, Real power) {
 
 template<typename Real>
 void MatrixBase<Real>::CopyCols(const MatrixBase<Real> &src,
-                                const std::vector<MatrixIndexT> &indices) {
+                                const MatrixIndexT *indices) {
   KALDI_ASSERT(NumRows() == src.NumRows());
-  KALDI_ASSERT(NumCols() == static_cast<MatrixIndexT>(indices.size()));
   MatrixIndexT num_rows = num_rows_, num_cols = num_cols_,
       this_stride = stride_, src_stride = src.stride_;
   Real *this_data = this->data_;
   const Real *src_data = src.data_;
 #ifdef KALDI_PARANOID
   MatrixIndexT src_cols = src.NumCols();
-  for (std::vector<MatrixIndexT>::const_iterator iter = indices.begin();
-       iter != indices.end(); ++iter)
-    KALDI_ASSERT(*iter >= -1 && *iter < src_cols);
+  for (MatrixIndexT i = 0; i < num_cols; i++)
+    KALDI_ASSERT(indices[i] >= -1 && indices[i] < src_cols);
 #endif                
   
   // For the sake of memory locality we do this row by row, rather
@@ -2534,9 +2541,8 @@ void MatrixBase<Real>::CopyCols(const MatrixBase<Real> &src,
 
 template<typename Real>
 void MatrixBase<Real>::CopyRows(const MatrixBase<Real> &src,
-                                const std::vector<MatrixIndexT> &indices) {
+                                const MatrixIndexT *indices) {
   KALDI_ASSERT(NumCols() == src.NumCols());
-  KALDI_ASSERT(NumRows() == static_cast<MatrixIndexT>(indices.size()));
   MatrixIndexT num_rows = num_rows_, num_cols = num_cols_,
       this_stride = stride_;
   Real *this_data = this->data_;
