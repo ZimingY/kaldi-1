@@ -88,11 +88,8 @@ void ComputeLabelsPosterior(
 /// NOTE: This ignores epsilon arcs, since I am assuming epsilon arcs weights
 /// are not tuneable (the do not correspond to any transition-id).
 void ComputeLabelsPosteriorAtTimeT(
-    const fst::Fst<fst::StdArc>& fst,
-    const TokenMap& fwd_t,
-    const TokenMap& bkw_tp1,
-    const int32 t,
-    DecodableInterface* decodable,
+    const fst::Fst<fst::StdArc>& fst, DecodableInterface* decodable,
+    const int32 t,  const TokenMap& fwd_t,  const TokenMap& bkw_tp1,
     LabelMap* pst);
 
 /// Debug utils.

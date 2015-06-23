@@ -33,10 +33,10 @@ class FastForwardBackward {
   typedef fst::StdArc StdArc;
   typedef StdArc::Label Label;
   typedef StdArc::StateId StateId;
+  typedef fst::ForwardBackwardArc<StdArc> FBArc;
   typedef fst::ForwardBackwardFst<StdArc> Fst;
   typedef fst::StateIterator<Fst> StateIterator;
-  typedef fst::InputArcIterator<Fst> InputArcIterator;
-  typedef fst::OutputArcIterator<Fst> OutputArcIterator;
+  typedef fst::ArcIterator<Fst> ArcIterator;
 
   FastForwardBackward(
       const Fst& fst, double beam_fwd, double beam_bkw, double delta);
@@ -56,25 +56,12 @@ class FastForwardBackward {
   bool Backward(DecodableInterface* decodable);
   bool Forward(DecodableInterface* decodable);
 
-  template <class I>
-  static StateId GetIteratorState(const Fst::Arc& arc);
-
-  template <>
-  static StateId GetIteratorState<InputArcIterator>(const Fst::Arc& arc) {
-    return arc.prevstate;
-  }
-
-  template <>
-  static StateId GetIteratorState<OutputArcIterator>(const Fst::Arc& arc) {
-    return arc.nextstate;
-  }
-
-  template <class I>
+  template <bool backward>
   void ProcessEmitting(
       DecodableInterface* decodable, int32 frame, const TokenMap& prev_toks,
       TokenMap* curr_toks);
 
-  template <class I>
+  template <bool backward>
   void ProcessNonemitting(TokenMap* curr_toks);
 
   const Fst& fst_;

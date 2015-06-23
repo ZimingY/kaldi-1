@@ -174,11 +174,8 @@ void ComputeLabelsPosterior(
 
 
 void ComputeLabelsPosteriorAtTimeT(
-    const fst::Fst<fst::StdArc>& fst,
-    const TokenMap& fwd_t,
-    const TokenMap& bkw_tp1,
-    const int32 t,
-    DecodableInterface* decodable,
+    const fst::Fst<fst::StdArc>& fst, DecodableInterface* decodable,
+    const int32 t, const TokenMap& fwd_t, const TokenMap& bkw_tp1,
     LabelMap* pst) {
   typedef fst::StdArc StdArc;
   typedef fst::Fst<StdArc> Fst;

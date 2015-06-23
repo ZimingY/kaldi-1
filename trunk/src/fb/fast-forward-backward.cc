@@ -64,25 +64,28 @@ bool FastForwardBackward::ForwardBackward(DecodableInterface *decodable) {
 ///////////////////////////////////////////////////////////////////////////
 
 bool FastForwardBackward::Backward(DecodableInterface *decodable) {
-  // Initialize backward trellis with the initial state of the backward graph
+  // Initialize backward trellis with the final states
   backward_.push_back(TokenMap());
-  StateId start_state = fst_bkw_.Start();
-  if (start_state != fst::kNoStateId) {
-    curr_forward_->insert(make_pair(start_state, 0.0));
+  for(StateIterator siter(fst_); !siter.Done(); siter.Next()) {
+    const FBArc::Weight& final = fst_.Final(siter.Value());
+    if (final != FBArc::Weight::Zero()) {
+      backward_[0].insert(make_pair(siter.Value(), final.Value()));
+    }
   }
   // Process nonemitting arcs to reach all states with epsilon-transition
   // to any of the final states
-  num_frames_decoded_ = 0;
-  ProcessNonemitting(fst_bkw_, &backward_.back());
-
-  // Process all input frames
-  while(num_frames_decoded_ < decodable->NumFramesReady()) {
-    PruneToks(beam_bkw_, &backward_.back());
+  ProcessNonemitting<true>(&backward_[0]);
+  PruneToks(beam_bkw_, &backward_[0]);
+  // Process all input frames ...
+  for (num_frames_decoded_ = 0;
+       num_frames_decoded_ < decodable->NumFramesReady();
+       ++num_frames_decoded_) {
     backward_.push_back(TokenMap());
-    ProcessEmitting(
-        fst_bkw_, decodable, num_frames_decoded_,
-        backward_[num_frames_decoded_], &backward_.back());
-    ProcessNonemitting();
+    ProcessEmitting<true>(
+        decodable, decodable->NumFramesReady() - num_frames_decoded_ - 1,
+        backward_[num_frames_decoded_],  &backward_.back());
+    ProcessNonemitting<true>(&backward_.back());
+    PruneToks(beam_bkw_, &backward_.back());
   }
   // Reverse backward matrix [T, T-1, ..., 1] -> [1, ..., T-1, T]
   std::reverse(backward_.begin(), backward_.end());
@@ -95,34 +98,37 @@ bool FastForwardBackward::Backward(DecodableInterface *decodable) {
 
 bool FastForwardBackward::Forward(DecodableInterface* decodable) {
   // Initialize forward trellis with the initial state
-  StateId start_state = fst_fwd_.Start();
+  StateId start_state = fst_.Start();
   if (start_state != fst::kNoStateId) {
     curr_forward_->insert(make_pair(start_state, 0.0));
   }
-  num_frames_decoded_ = 0;
-  ProcessNonemitting(fst_fwd_, curr_forward_);
-
+  // Process nonemitting arcs to reach all states with epsilon-transition
+  // from the start state
+  ProcessNonemitting<false>(curr_forward_);
   // Compute total likelihood using forward_[0] and backward_[0].
   // Note: Remember that we have backward_[0] because we did the full
   // backward pass before.
   likelihood_ = ComputeLikelihood(*curr_forward_, backward_[0]);
-
-  while(!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
-    // Prune tokens from the previous timestep
-    PruneToksForwardBackward(
-        -likelihood_, beam_fwd_, curr_forward_,
-        &backward_[num_frames_decoded_]);
+  PruneToksForwardBackward(
+      -likelihood_, beam_fwd_, curr_forward_, &backward_[0]);
+  // Process all input frames ...
+  for (num_frames_decoded_ = 0;
+       num_frames_decoded_ < decodable->NumFramesReady();
+       ++num_frames_decoded_) {
     // Compute label posteriors at time t.
     label_posteriors_.push_back(LabelMap());
-    ComputeLabelsPosteriorAtTimeT(fst_fwd_, *curr_forward_,
-                                  backward_[num_frames_decoded_ + 1],
-                                  num_frames_decoded_, decodable,
-                                  &label_posteriors_.back());
+    ComputeLabelsPosteriorAtTimeT(
+        fst_, decodable, num_frames_decoded_, *curr_forward_,
+        backward_[num_frames_decoded_ + 1], &label_posteriors_.back());
     // Swap current & previous tokens, and clean current tokens
     std::swap(prev_forward_, curr_forward_);
     curr_forward_->clear();
-    ProcessEmitting(fst_fwd_, decodable, prev_forward_, curr_forward_);
-    ProcessNonemitting(fst_fwd_, curr_forward_);
+    ProcessEmitting<false>(
+        decodable, num_frames_decoded_, *prev_forward_, curr_forward_);
+    ProcessNonemitting<false>(curr_forward_);
+    PruneToksForwardBackward(
+        -likelihood_, beam_fwd_, curr_forward_,
+        &backward_[num_frames_decoded_]);
   }
   return (!curr_forward_->empty());
 }
@@ -131,17 +137,17 @@ bool FastForwardBackward::Forward(DecodableInterface* decodable) {
 /// GENERIC FORWARD/BACKWARD PASS METHODS ...
 ///////////////////////////////////////////////////////////////////////////
 
-template <class I>
+template <bool backward>
 void FastForwardBackward::ProcessEmitting(
     DecodableInterface* decodable, int32_t frame,
     const TokenMap& prev_toks, TokenMap* curr_toks) {
-
   for (TokenMap::const_iterator ptok = prev_toks.begin();
        ptok != prev_toks.end(); ++ptok) {
     const StateId state = ptok->first;
-    for (I aiter(fst_, state); !aiter.Done(); aiter.Next()) {
-      const Fst::Arc& arc = aiter.Value();
-      const StateId nextstate = GetIteratorState(arc);
+    for (ArcIterator aiter(fst_, state, backward); !aiter.Done();
+         aiter.Next()) {
+      const FBArc& arc = aiter.Value();
+      const StateId nextstate = backward ? arc.prevstate : arc.nextstate;
       // propagate only emitting symbols, and arcs to those states that
       // were active in the backward pass in the corresponding frame
       // [i.e. alpha(s, t) * beta(s, t) > 0]
@@ -157,16 +163,18 @@ void FastForwardBackward::ProcessEmitting(
   }
 }
 
-template <class I>
+template <bool backward>
 void FastForwardBackward::ProcessNonemitting(TokenMap* curr_toks) {
   // If the wfst has no input epsilons, we are done
-  if (!fst_.Properties(fst::kIEpsilons, false)) continue;
+  if (!fst_.Properties(fst::kIEpsilons, false)) return;
 
   QueueSet<StateId> queue_set;
   for (TokenMap::iterator tok = curr_toks->begin(); tok != curr_toks->end();
        ++tok) {
-    queue_set.push(tok->first);
-    tok->second.last_cost = tok->second.cost;
+    if (fst_.NumInputEpsilons<backward>(tok->first)) {
+      queue_set.push(tok->first);
+      tok->second.last_cost = tok->second.cost;
+    }
   }
 
   while (!queue_set.empty()) {
@@ -177,9 +185,10 @@ void FastForwardBackward::ProcessNonemitting(TokenMap* curr_toks) {
     const double last_cost = ptok.last_cost;
     ptok.last_cost = -kaldi::kLogZeroDouble;
 
-    for (I aiter(fst_, state); !aiter.Done(); aiter.Next()) {
-      const Fst::Arc& arc = aiter.Value();
-      const StateId nextstate = GetIteratorState(arc);
+    for (ArcIterator aiter(fst_, state, backward); !aiter.Done();
+         aiter.Next()) {
+      const FBArc& arc = aiter.Value();
+      const StateId nextstate = backward ? arc.prevstate : arc.nextstate;
       if (!arc.ilabel) {
         Token& ctok = curr_toks->insert(make_pair(
             nextstate, Token(-kaldi::kLogZeroDouble))).first->second;

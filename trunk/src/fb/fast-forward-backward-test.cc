@@ -3,16 +3,16 @@
 #include "util/kaldi-io.h"
 
 int main(int argc, char** argv) {
-  fst::VectorFst<fst::StdArc> fst_fwd;
-  fst::VectorFst<fst::StdArc> fst_bkw;
+  fst::VectorFst<fst::StdArc> vfst;
+  fst::ForwardBackwardFst<fst::StdArc> fst;
   kaldi::unittest::DummyDecodable dec;
-  kaldi::FastForwardBackward fb(fst_fwd, fst_bkw, 1E20, 1E20, 1E-9);
+  kaldi::FastForwardBackward fb(fst, 1E20, 1E20, 1E-9);
 
   // Arbitrary WFST. Arbitrary input sequence.
-  kaldi::unittest::CreateWFST_EpsilonBucle(&fst_fwd);
-  // Reverse forward WFST to obtain backward's
-  fst::Reverse(fst_fwd, &fst_bkw);
+  kaldi::unittest::CreateWFST_EpsilonBucle(&vfst);
   kaldi::unittest::CreateObservation_Arbitrary(&dec);
+  fst = vfst;
+
   KALDI_ASSERT(fb.ForwardBackward(&dec));
 
   const vector<kaldi::LabelMap>& pst = fb.LabelPosteriors();

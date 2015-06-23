@@ -7,7 +7,7 @@
 #include "gmm/decodable-am-diag-gmm.h"
 
 #include "fb/simple-common.h"
-#include "fb/simple-forward-backward.h"
+#include "fb/fast-forward-backward.h"
 
 int main(int argc, char *argv[]) {
   try {
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
         KALDI_WARN << "No features for utterance " << utt;
       } else {
         const Matrix<BaseFloat> &features = feature_reader.Value(utt);
-        VectorFst<StdArc> fst(fst_reader.Value());
+        fst::ForwardBackwardFst<StdArc> fst(fst_reader.Value());
         fst_reader.FreeCurrent();  // this stops copy-on-write of the fst
         // by deleting the fst inside the reader, since we're about to mutate
         // the fst by adding transition probs.
@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
                              &fst);
         }
 
-        SimpleForwardBackward fb(fst, beam_bkw, beam_fwd, delta);
+        FastForwardBackward fb(fst, beam_bkw, beam_fwd, delta);
         DecodableAmDiagGmm gmm_decodable(am_gmm, trans_model, features);
 
         if (!fb.ForwardBackward(&gmm_decodable)) {

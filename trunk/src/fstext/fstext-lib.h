@@ -32,4 +32,5 @@
 #include "lattice-utils.h"
 #include "determinize-lattice.h"
 #include "deterministic-fst.h"
+#include "forward-backward-fst.h"
 #endif

@@ -31,7 +31,7 @@ fst::VectorFst<fst::StdArc> *GetHmmAsFst(
     std::vector<int32> phone_window,
     const ContextDependencyInterface &ctx_dep,
     const TransitionModel &trans_model,
-    const HTransducerConfig &config,    
+    const HTransducerConfig &config,
     HmmCacheType *cache) {
   using namespace fst;
 
@@ -85,7 +85,7 @@ fst::VectorFst<fst::StdArc> *GetHmmAsFst(
     if (iter != cache->end())
       return iter->second;
   }
-  
+
   VectorFst<StdArc> *ans = new VectorFst<StdArc>;
 
   typedef StdArc Arc;
@@ -496,7 +496,7 @@ static void AddSelfLoopsBefore(const TransitionModel &trans_model,
   // forward-prob for that state (which is one minus self-loop-prob).  We do it
   // like this to maintain stochasticity (i.e. rather than multiplying the arcs
   // with the corresponding labels on them by this probability).
-  
+
   for (StateId s = 0; s < static_cast<StateId>(state_in.size()); s++) {
     if (state_in[s] > 0) {  // defined, and not eps or a disambiguation symbol...
       int32 trans_state = static_cast<int32>(state_in[s]);
@@ -642,7 +642,7 @@ static bool SplitToPhonesInternal(const TransitionModel &trans_model,
       else {  // reordered.
         while (i+1 < alignment.size() &&
               trans_model.IsSelfLoop(alignment[i+1])) {
-          KALDI_ASSERT(trans_model.TransitionIdToTransitionState(alignment[i]) == 
+          KALDI_ASSERT(trans_model.TransitionIdToTransitionState(alignment[i]) ==
                  trans_model.TransitionIdToTransitionState(alignment[i+1]));
           i++;
         }
@@ -674,7 +674,7 @@ static bool SplitToPhonesInternal(const TransitionModel &trans_model,
     // The next if-statement checks if the initial trans-id at the current end
     // point is the initial-state of the current phone if that initial-state
     // is emitting (a cursory check that the alignment is plausible).
-    int32 trans_state = 
+    int32 trans_state =
       trans_model.TransitionIdToTransitionState(alignment[cur_point]);
     int32 phone = trans_model.TransitionStateToPhone(trans_state);
     int32 pdf_class = trans_model.GetTopo().TopologyForPhone(phone)[0].pdf_class;
@@ -795,19 +795,19 @@ static BaseFloat GetScaledTransitionLogProb(const TransitionModel &trans_model,
 }
 
 
-
+template <class F>
 void AddTransitionProbs(const TransitionModel &trans_model,
                         const std::vector<int32> &disambig_syms,  // may be empty
                         BaseFloat transition_scale,
                         BaseFloat self_loop_scale,
-                        fst::VectorFst<fst::StdArc> *fst) {
+                        F* fst) {
   using namespace fst;
   KALDI_ASSERT(IsSortedAndUniq(disambig_syms));
   int num_tids = trans_model.NumTransitionIds();
-  for (StateIterator<VectorFst<StdArc> > siter(*fst);
+  for (StateIterator<F> siter(*fst);
       !siter.Done();
       siter.Next()) {
-    for (MutableArcIterator<VectorFst<StdArc> > aiter(fst, siter.Value());
+    for (MutableArcIterator<F> aiter(fst, siter.Value());
          !aiter.Done();
          aiter.Next()) {
       StdArc arc = aiter.Value();
@@ -875,7 +875,7 @@ bool ConvertPhnxToProns(const std::vector<int32> &phnx,
                         int32 word_end_sym,
                         std::vector<std::vector<int32> > *prons) {
   size_t i = 0, j = 0;
-    
+
   while (i < phnx.size()) {
     if (phnx[i] == 0) return false; // zeros not valid here.
     if (phnx[i] == word_start_sym) { // start a word...
@@ -914,5 +914,21 @@ bool ConvertPhnxToProns(const std::vector<int32> &phnx,
   return (j == words.size());
 }
 
+
+/// Specialization of AddTransitionProbs for VectorFst and ForwardBackwardFst
+
+template void AddTransitionProbs< fst::VectorFst<fst::StdArc> >(
+    const TransitionModel &trans_model,
+    const std::vector<int32> &disambig_syms,
+    BaseFloat transition_scale,
+    BaseFloat self_loop_scale,
+    fst::VectorFst<fst::StdArc>* fst);
+
+template void AddTransitionProbs< fst::ForwardBackwardFst<fst::StdArc> >(
+    const TransitionModel &trans_model,
+    const std::vector<int32> &disambig_syms,
+    BaseFloat transition_scale,
+    BaseFloat self_loop_scale,
+    fst::ForwardBackwardFst<fst::StdArc>* fst);
 
 } // End namespace kaldi

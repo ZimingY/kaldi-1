@@ -204,10 +204,9 @@ bool SimpleForwardBackward::Forward(DecodableInterface* decodable) {
         &backward_[num_frames_decoded_]);
     // Compute label posteriors at time t.
     label_posteriors_.push_back(LabelMap());
-    ComputeLabelsPosteriorAtTimeT(fst_, *curr_forward_,
-                                  backward_[num_frames_decoded_ + 1],
-                                  num_frames_decoded_, decodable,
-                                  &label_posteriors_.back());
+    ComputeLabelsPosteriorAtTimeT(
+        fst_, decodable, num_frames_decoded_, *curr_forward_,
+        backward_[num_frames_decoded_ + 1], &label_posteriors_.back());
     // Swap current & previous tokens, and clean current tokens
     std::swap(prev_forward_, curr_forward_);
     curr_forward_->clear();
