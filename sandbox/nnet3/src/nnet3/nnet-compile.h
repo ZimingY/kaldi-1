@@ -22,6 +22,7 @@
 
 #include "nnet3/nnet-component-itf.h"
 #include "nnet3/nnet-nnet.h"
+#include "nnet3/nnet-parse.h"
 #include "nnet3/nnet-computation.h"
 #include "nnet3/nnet-computation-graph.h"
 
@@ -50,24 +51,24 @@ class Compiler {
   // multiple commands.
   struct StepInfo {
     int32 node_index;  // network-node index
-    int32 input_step;  // for nodes of type kComponent, the step-index of the
-                       // step corresponding to the input (of type kDescriptor).
     bool is_input;  // true if this step corresponds to an input to the
                     // network.  For steps corresponding to nodes of type kInput,
                     // is_input will always be true; for steps of type kComponent,
                     // it may or may not be true; otherwise it will be false.
-    int32 value;  // matrix index of value that this step outputs.
-    int32 deriv;  // matrix index of derivative at the output of this step; zero if
-    // not used (note: index zero is reserved for the empty matrix).
-
+    int32 value;  // sub-matrix index of value that this step outputs.
+    int32 deriv;  // sub-matrix index of derivative at the output of this step; zero
+                  // if not used (note: index zero is reserved for the empty
+                  // matrix).
+    
     // precomputed_indexes_index is the index into the
-    // component_precomputed_indexes array in the NnetComputation.
+    // component_precomputed_indexes array in the NnetComputation, or zero if
+    // none needed.
     int32 precomputed_indexes_index;
 
     std::vector<Index> output_indexes;      // Indexes that this step outputs.
-    std::vector<int32> output_cindex_ids;   // cindex_ids for each of the output
-    // indexes.
-
+    std::vector<int32> output_cindex_ids;   // cindex_ids corresponding to each
+                                            // of the output indexes.
+    
     // If this component is of type kDescriptor (and note that the top-level
     // Descriptor is a concatenation over >= 1 parts), then we set value_parts
     // to a list of submatrix-indexes, each for the corresponding part of the
@@ -78,26 +79,49 @@ class Compiler {
     // we're doing backprop).
     std::vector<int32> deriv_parts;
 
-    StepInfo(): node_index(-1), input_step(-1), is_input(false),
-                value(0), deriv(0), precomputed_indexes_index(0) { }
+    // for nodes corresponding to descriptors, input_locations_list will contain
+    // information about the inputs to this descriptor, telling us for each row
+    // of the matrix what other matrix rows it is a summation over.  this is a
+    // quantity indexed[part-index][row-index], then a list of pairs (step,
+    // row-index), that we store here to avoid computing it twice in forward and
+    // backprop.
+    std::vector<std::vector<std::vector<std::pair<int32,int32> > > > input_locations_list;
+                     
+    StepInfo(): node_index(-1), is_input(false), value(0),
+                deriv(0), precomputed_indexes_index(0) { }
   };
 
   // this sets up cindex_id_to_location_.
   void CreateLocationInfo(const std::vector<std::vector<int32> > &by_step);
+
+  // Computes the set of preceding steps that this step depends on.  Assumes
+  // CreateLocationInfo() has already been called.
+  void ComputeStepDependencies(const std::vector<int32> &this_step,
+                               unordered_set<int32> *dep_steps);
   
-  // this sets up steps_, destroying "by_step" in the process.
-  // It also sets num_matrices_.
-  void CreateStepInfo(std::vector<std::vector<int32> > *by_step);
+  // This function outputs to each element of "deriv_needed" a bool saying
+  // whether, for that step, we need to allocate the matrix of derivatives
+  // (interpret this as being at the output of that step).  This variable
+  // also tells us whether we need to execute the backprop code for that step.
+  void ComputeDerivNeeded(const std::vector<std::vector<int32> > &steps,
+                          std::vector<bool> *deriv_needed);
+  
+  // this sets up steps_, destroying the input "by_step" in the process.  It
+  // also sets various matrix and sub-matrix sizes in "computation".
+  void CreateStepInfo(const std::vector<bool> &deriv_needed,
+                      std::vector<std::vector<int32> > *by_step,
+                      NnetComputation *computation);
 
 
-
-  // Steps of the computation.  Index by step-index.
+  // Miscellaneous info pertaining to various steps of the computation.  Indexed
+  // by step-index.
   std::vector<StepInfo> steps_;
 
-  int32 num_matrices_;
-  
-  /// This maps each cindex_id to its location.  A location
-  /// is a pair (step-index, matrix-row-index).
+  /// This maps each cindex_id to its location.  However, you should not rely on
+  /// its accuracy for cindex_ids that correspond to the Descriptors at
+  /// Component inputs, since it's possible in principle for such cindex_ids to
+  /// exist at >1 location.  A location is a pair (step-index,
+  /// matrix-row-index).
   std::vector<std::pair<int32, int32> > cindex_id_to_location_;
 
 
@@ -107,13 +131,9 @@ class Compiler {
   // sets up the input_output_info of the computation.
   void SetInputOutputInfo(NnetComputation *computation) const;
 
-  // Sets up sub-matrix indexes.  For each matrix index, an equal sub-matrix
-  // index is created that corresponds to that entire matrix (including index
-  // zero, for the empty sub-matrix corresponding to the empty matrix);
-  // and also for those matrices that are multi-part (because they correspond
-  // to a Descriptor that has a "parts" vector with size >1), it sets up
-  // a sub-matrix for each part and puts the indexes into the "submatrix_indexes"
-  // vector of the StepInfo.
+  // Sets up sub-matrix indexes for nodes of type Descriptor (needed mainly
+  // because Descriptors in general have many parts corresponding to
+  // feature-dimension ranges, and they live in sub-matrices.
   void DefineSubmatrices(NnetComputation *computation);
 
   // Adds to the computation object the commands to set up the matrices.
@@ -131,27 +151,69 @@ class Compiler {
   // to a Component.
   void AddPropagateStep(int32 step, NnetComputation *computation) const;
 
+
   // Called from DoForwardComputation, handles the case where the step
   // corresponds to type kDescriptor
   void DoForwardComputationDescriptor(
-      int32 step, const Descriptor &descriptor,
-      NnetComputation *computation) const;
+      int32 step, NnetComputation *computation) const;
 
-  // Called from DoForwardComputationDescriptor.  
-  void DoForwardComputationForwardingDescriptor(
-      int32 step,
+  void DoForwardComputationSumDescriptor(
+      int32 step, int32 part_index, NnetComputation *computation) const;
+
+
+  // For the "part_index"'th part of the Descriptor for step "step" (which
+  // must correspond to a Descriptor and not an Input or Component), this
+  // function computes a vector of lists of submatrix locations of the inputs.
+  // It is indexed by the number of rows in the output of this descriptor,
+  // and the i'th element of the output is a list of pairs (step-index,
+  // row-index-of-matrix).  The output of this row of this row of this part
+  // of the computation will be a sum over those pairs.
+  void ComputeInputLocationsList(
+      int32 step, int32 part_index,
+      std::vector<std::vector<std::pair<int32, int32> > > *input_locations)
+      const;
+
+  // Changes the format of the location-list produced by ComputeInputLocationsList,
+  // to have pairs (sub-matrix, row) instead of (step, row), by replacing each step
+  // (i.e. the first of each pair) with steps_[step].value.
+  void ComputeValueSubmatLocationsList(
+ const std::vector<std::vector<std::pair<int32, int32> > > &input_locations_list,
+     std::vector<std::vector<std::pair<int32, int32> > > *submat_locations_list)
+      const;
+
+
+  // Changes the format of the location-list produced by
+  // ComputeInputLocationsList, to have pairs (sub-matrix, row) instead of
+  // (step, row), but with locations of derivatives not values (for use in
+  // backprop).  It does this by replacing each step (i.e. the first of each
+  // pair) with steps_[step].deriv, but if this value is zero (i.e. no such
+  // derivative exists) it removes the pair.  This could occur in situations
+  // where we only need to propagate the derivative selectively to some inputs.
+  void ComputeDerivSubmatLocationsList(
+ const std::vector<std::vector<std::pair<int32, int32> > > &input_locations_list,
+ std::vector<std::vector<std::pair<int32, int32> > > *submat_locations_list)
+      const;
+  
+
+
+  // Called from DoForwardComputationSumDescriptor.
+  // Does the forward computation for one sub-matrix of a Descriptor,
+  // after the caller has already worked out what the input terms for
+  // each row are in terms of a list of sub-matrix locations; each location
+  // is pair (submatrix-index, row-index)
+  void DoForwardComputationFromSubmatLocationsList(
       int32 value_submatrix_index,
-      bool is_first_term_in_sum,
-      const ForwardingDescriptor &descriptor,
-      NnetComputation *computation) const;
+      const std::vector<std::vector<std::pair<int32, int32> > > &submat_locations,
+      NnetComputation *computation) const;  
 
-  // Called from DoForwardComputationForwardingDescriptor.
+
   void DoForwardComputationFromSubmatLocations(
       int32 value_submatrix_index,
       bool is_first_term_in_sum,
       const std::vector<std::pair<int32, int32> > &submat_locations,
       NnetComputation *computation) const;  
-
+  
+  
   // Called from DoForwardComputationFromSubmatLocations (special
   // case where all input is from the same matrix).
   void DoForwardComputationFromIndexes(
@@ -163,8 +225,8 @@ class Compiler {
   
   
   // Adds to "computation" the command(s) for the backward computation (if any) for
-  // this step.
-  void DoBackwardComputation(int32 step, NnetComputation *computation) const;
+  // this step.  (non-const only because we clear the cached submat_locations).
+  void DoBackwardComputation(int32 step, NnetComputation *computation);
 
   // Called from DoBackwardComputation, handles the case where the step corresponds
   // to a Component.
@@ -173,21 +235,25 @@ class Compiler {
   // Called from DoBackwardComputation, handles the case where the step
   // corresponds to type kDescriptor.
   void DoBackwardComputationDescriptor(
-      int32 step, const Descriptor &descriptor,
-      NnetComputation *computation) const;
+      int32 step, NnetComputation *computation);
 
-  // Called from DoBackwardComputationDescriptor.  
-  void DoBackwardComputationForwardingDescriptor(
-      int32 step, int32 deriv_submatrix_index,
-      const ForwardingDescriptor &descriptor,
+  // Called from DoBackwardComputationSumDescriptor.  
+  void DoBackwardComputationSumDescriptor(
+      int32 step, int32 part_index,
       NnetComputation *computation) const;
 
   // Called from DoBackwardComputationForwardingDescriptor.
+  void DoBackwardComputationFromSubmatLocationsList(
+      int32 deriv_submatrix_index,
+      const std::vector<std::vector<std::pair<int32, int32> > >&submat_locations,
+      NnetComputation *computation) const;  
+
+
   void DoBackwardComputationFromSubmatLocations(
       int32 deriv_submatrix_index,
       const std::vector<std::pair<int32, int32> > &submat_locations,
       NnetComputation *computation) const;  
-
+  
   // Called from DoBackwardComputationFromSubmatLocations - special case where
   // input is from just one matrix.
   void DoBackwardComputationFromIndexes(
@@ -204,7 +270,8 @@ class Compiler {
   // and input derivatives).
   void DestroyMatrices(NnetComputation *computation);
 
-  void AddCommands(NnetComputation *computation);
+  void AddCommands(const std::vector<bool> &deriv_needed,
+                   NnetComputation *computation);
 
 };
 

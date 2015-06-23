@@ -1,10 +1,10 @@
-// nnet3/nnet-component.h
+// nnet3/nnet-simple-component.h
 
 // Copyright 2011-2013  Karel Vesely
 //           2012-2015  Johns Hopkins University (author: Daniel Povey)
 //                2013  Xiaohui Zhang    
 //                2014  Vijayaditya Peddinti
-//                2014  Guoguo Chen
+//           2014-2015  Guoguo Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -32,6 +32,11 @@
 namespace kaldi {
 namespace nnet3 {
 
+/// @file  This file contains declarations of components that are "simple", meaning
+///   they don't care about the indexes they are operating on, produce one
+///   output for one input, and return the kSimpleComponent flag in their
+///   Properties(): for example, tanh and affine components.  In
+///   nnet-general-component.h there are components that don't fit this pattern.
 
 // This "nnet3" version of the p-norm component only supports the 2-norm.
 class PnormComponent: public Component {
@@ -45,7 +50,7 @@ class PnormComponent: public Component {
   }
   PnormComponent(): input_dim_(0), output_dim_(0) { }
   virtual std::string Type() const { return "PnormComponent"; }
-  virtual void InitFromString(std::string args); 
+  virtual void InitFromConfig(ConfigLine *cfl); 
   virtual int32 InputDim() const { return input_dim_; }
   virtual int32 OutputDim() const { return output_dim_; }
   virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
@@ -80,7 +85,8 @@ class NormalizeComponent: public NonlinearComponent {
   explicit NormalizeComponent(int32 dim): NonlinearComponent(dim) { }
   explicit NormalizeComponent(const NormalizeComponent &other): NonlinearComponent(other) { }
   virtual int32 Properties() const {
-    return kSimpleComponent|kBackpropNeedsInput|kPropagateInPlace|kBackpropInPlace;
+    return kSimpleComponent|kBackpropNeedsInput|kPropagateInPlace|
+        kBackpropInPlace;
   }
   NormalizeComponent() { }
   virtual std::string Type() const { return "NormalizeComponent"; }
@@ -111,7 +117,7 @@ class SigmoidComponent: public NonlinearComponent {
   SigmoidComponent() { }
   virtual std::string Type() const { return "SigmoidComponent"; }
   virtual int32 Properties() const {
-    return kSimpleComponent|kBackpropNeedsOutput|kPropagateInPlace;
+    return kSimpleComponent|kBackpropNeedsOutput|kPropagateInPlace|kStoresStats;
   }
   virtual Component* Copy() const { return new SigmoidComponent(*this); }
   virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
@@ -124,6 +130,7 @@ class SigmoidComponent: public NonlinearComponent {
                         const CuMatrixBase<BaseFloat> &out_deriv,
                         Component *to_update,
                         CuMatrixBase<BaseFloat> *in_deriv) const;
+  virtual void StoreStats(const CuMatrixBase<BaseFloat> &out_value);
  private:
   SigmoidComponent &operator = (const SigmoidComponent &other); // Disallow.
 };
@@ -136,7 +143,7 @@ class TanhComponent: public NonlinearComponent {
   virtual std::string Type() const { return "TanhComponent"; }
   virtual Component* Copy() const { return new TanhComponent(*this); }
   virtual int32 Properties() const {
-    return kSimpleComponent|kBackpropNeedsOutput|kPropagateInPlace;
+    return kSimpleComponent|kBackpropNeedsOutput|kPropagateInPlace|kStoresStats;
   }
   virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
                          const CuMatrixBase<BaseFloat> &in,
@@ -148,6 +155,7 @@ class TanhComponent: public NonlinearComponent {
                         const CuMatrixBase<BaseFloat> &out_deriv,
                         Component *to_update,
                         CuMatrixBase<BaseFloat> *in_deriv) const;
+  virtual void StoreStats(const CuMatrixBase<BaseFloat> &out_value);  
  private:
   TanhComponent &operator = (const TanhComponent &other); // Disallow.
 };
@@ -161,7 +169,8 @@ class RectifiedLinearComponent: public NonlinearComponent {
   virtual std::string Type() const { return "RectifiedLinearComponent"; }
   virtual Component* Copy() const { return new RectifiedLinearComponent(*this); }
   virtual int32 Properties() const {
-    return kSimpleComponent|kLinearInInput|kBackpropNeedsOutput|kPropagateInPlace;
+    return kSimpleComponent|kLinearInInput|kBackpropNeedsOutput|kPropagateInPlace|
+        kStoresStats;
   }
   virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
                          const CuMatrixBase<BaseFloat> &in,
@@ -173,6 +182,7 @@ class RectifiedLinearComponent: public NonlinearComponent {
                         const CuMatrixBase<BaseFloat> &out_deriv,
                         Component *to_update,
                         CuMatrixBase<BaseFloat> *in_deriv) const;
+  virtual void StoreStats(const CuMatrixBase<BaseFloat> &out_value);  
  private:
   RectifiedLinearComponent &operator = (const RectifiedLinearComponent &other); // Disallow.
 };
@@ -191,7 +201,7 @@ class AffineComponent: public UpdatableComponent {
   virtual int32 OutputDim() const { return linear_params_.NumRows(); }
 
   virtual std::string Info() const;
-  virtual void InitFromString(std::string args);
+  virtual void InitFromConfig(ConfigLine *cfl); 
   
   AffineComponent() { } // use Init to really initialize.
   virtual std::string Type() const { return "AffineComponent"; }
@@ -288,7 +298,7 @@ class SoftmaxComponent: public NonlinearComponent {
   SoftmaxComponent() { }
   virtual std::string Type() const { return "SoftmaxComponent"; }
   virtual int32 Properties() const {
-    return kSimpleComponent|kBackpropNeedsOutput;
+    return kSimpleComponent|kBackpropNeedsOutput|kStoresStats;
   }
   virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
                          const CuMatrixBase<BaseFloat> &in,
@@ -300,12 +310,38 @@ class SoftmaxComponent: public NonlinearComponent {
                         const CuMatrixBase<BaseFloat> &out_deriv,
                         Component *to_update,
                         CuMatrixBase<BaseFloat> *in_deriv) const;
+  virtual void StoreStats(const CuMatrixBase<BaseFloat> &out_value);    
   
   virtual Component* Copy() const { return new SoftmaxComponent(*this); }
  private:
   SoftmaxComponent &operator = (const SoftmaxComponent &other); // Disallow.
 };
 
+class LogSoftmaxComponent: public NonlinearComponent {
+ public:
+  explicit LogSoftmaxComponent(int32 dim): NonlinearComponent(dim) { }
+  explicit LogSoftmaxComponent(const LogSoftmaxComponent &other):
+      NonlinearComponent(other) { }
+  LogSoftmaxComponent() { }
+  virtual std::string Type() const { return "LogSoftmaxComponent"; }
+  virtual int32 Properties() const {
+    return kSimpleComponent|kBackpropNeedsOutput|kStoresStats;
+  }
+  virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
+                         const CuMatrixBase<BaseFloat> &in,
+                         CuMatrixBase<BaseFloat> *out) const;
+  virtual void Backprop(const std::string &debug_info,
+                        const ComponentPrecomputedIndexes *indexes,
+                        const CuMatrixBase<BaseFloat> &in_value,
+                        const CuMatrixBase<BaseFloat> &out_value,
+                        const CuMatrixBase<BaseFloat> &out_deriv,
+                        Component *to_update,
+                        CuMatrixBase<BaseFloat> *in_deriv) const;
+
+  virtual Component* Copy() const { return new LogSoftmaxComponent(*this); }
+ private:
+  LogSoftmaxComponent &operator = (const LogSoftmaxComponent &other); // Disallow.
+};
 
 /// Keywords: natural gradient descent, NG-SGD, naturalgradient.  For
 /// the top-level of the natural gradient code look here, and also in
@@ -334,8 +370,7 @@ class NaturalGradientAffineComponent: public AffineComponent {
             std::string matrix_filename);
 
   virtual void Resize(int32 input_dim, int32 output_dim);
-  
-  virtual void InitFromString(std::string args);
+  virtual void InitFromConfig(ConfigLine *cfl); 
   virtual std::string Info() const;
   virtual Component* Copy() const;
   NaturalGradientAffineComponent(): max_change_per_sample_(0.0) { }
@@ -401,9 +436,9 @@ class FixedAffineComponent: public Component {
   /// matrix should be of size input-dim+1 to output-dim, last col is offset
   void Init(const CuMatrixBase<BaseFloat> &matrix); 
 
-  // InitFromString takes only the option matrix=<string>,
+  // The ConfigLine cfl contains just the option matrix=<string>,
   // where the string is the filename of a Kaldi-format matrix to read.
-  virtual void InitFromString(std::string args);
+  virtual void InitFromConfig(ConfigLine *cfl); 
 
   virtual int32 Properties() const { return kSimpleComponent|kBackpropAdds; }
   virtual int32 InputDim() const { return linear_params_.NumCols(); }
@@ -450,7 +485,7 @@ public:
   void GetSizes(std::vector<int32> *sizes) const; // Get a vector saying, for
                                                   // each output-dim, how many
                                                   // inputs were summed over.
-  virtual void InitFromString(std::string args);
+  virtual void InitFromConfig(ConfigLine *cfl); 
   SumGroupComponent() { }
   virtual std::string Type() const { return "SumGroupComponent"; }
   virtual int32 Properties() const { return kSimpleComponent|kLinearInInput; }
@@ -494,9 +529,9 @@ class FixedScaleComponent: public Component {
   
   void Init(const CuVectorBase<BaseFloat> &scales);
 
-  // InitFromString takes only the option scales=<string>,
+  // The ConfigLine cfl contains only the option scales=<string>,
   // where the string is the filename of a Kaldi-format matrix to read.
-  virtual void InitFromString(std::string args);
+  virtual void InitFromConfig(ConfigLine *cfl);
   
   virtual int32 InputDim() const { return scales_.Dim(); }
   virtual int32 OutputDim() const { return scales_.Dim(); }
@@ -536,10 +571,9 @@ class FixedBiasComponent: public Component {
   
   void Init(const CuVectorBase<BaseFloat> &scales); 
   
-  // InitFromString takes only the option bias=<string>,
+  // The ConfigLine cfl contains only the option bias=<string>,
   // where the string is the filename of a Kaldi-format matrix to read.
-  virtual void InitFromString(std::string args);
-  
+  virtual void InitFromConfig(ConfigLine *cfl);
   virtual int32 InputDim() const { return bias_.Dim(); }
   virtual int32 OutputDim() const { return bias_.Dim(); }
   using Component::Propagate; // to avoid name hiding
@@ -562,10 +596,35 @@ class FixedBiasComponent: public Component {
   KALDI_DISALLOW_COPY_AND_ASSIGN(FixedBiasComponent);
 };
 
+// NoOpComponent just duplicates its input.  We don't anticipate this being used
+// very often, but it may sometimes make your life easier
+class NoOpComponent: public NonlinearComponent {
+ public:
+  explicit NoOpComponent(int32 dim): NonlinearComponent(dim) { }
+  explicit NoOpComponent(const NoOpComponent &other): NonlinearComponent(other) { }    
+  NoOpComponent() { }
+  virtual std::string Type() const { return "NoOpComponent"; }
+  virtual int32 Properties() const {
+    return kSimpleComponent|kLinearInInput|kPropagateInPlace;
+  }
+  virtual Component* Copy() const { return new NoOpComponent(*this); }
+  virtual void Propagate(const ComponentPrecomputedIndexes *indexes,
+                         const CuMatrixBase<BaseFloat> &in,
+                         CuMatrixBase<BaseFloat> *out) const;
+  virtual void Backprop(const std::string &debug_info,
+                        const ComponentPrecomputedIndexes *indexes,
+                        const CuMatrixBase<BaseFloat> &, //in_value
+                        const CuMatrixBase<BaseFloat> &, // out_value,
+                        const CuMatrixBase<BaseFloat> &out_deriv,
+                        Component *to_update,
+                        CuMatrixBase<BaseFloat> *in_deriv) const;
+ private:
+  NoOpComponent &operator = (const NoOpComponent &other); // Disallow.
+};
+
 
 } // namespace nnet3
 } // namespace kaldi
 
 
 #endif
-

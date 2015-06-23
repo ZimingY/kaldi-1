@@ -49,7 +49,8 @@ namespace nnet3 {
 // MiscComputationInfo is a place we enter information about a requested
 // computation that doesn't easily fit into the framework as given: things like
 // the maximum unrolling we want to do, or how far ahead in time we want a
-// particular adaptation method to be able to look.
+// particular adaptation method to be able to look.  Elements of this are
+// interpreted by individual components, for the most part.
 struct MiscComputationInfo {
   // will add members here as needed.
 };
@@ -82,26 +83,36 @@ struct ComputationRequest {
   std::vector<IoSpecification> inputs;
   std::vector<IoSpecification> outputs;
 
-  // if need_model_derivative is true, then we'll be doing either model training
-  // or model-derivative computation.
+  /// if need_model_derivative is true, then we'll be doing either model
+  /// training or model-derivative computation, so updatable components need to
+  /// be backprop'd.
   bool need_model_derivative;
 
-  // if this is true (and it will almost always be true), then when computing
-  // the computation graph we follow optional dependencies (see the is_optional
-  // argument of GetInputIndexes in nnet-component-itf.h; these are for use in
-  // recurrent nets).  If it is false we don't follow the optional dependencies;
-  // this is intended only for purposes of discovering the amount of
-  // left-context and right-context of the net.
-  bool use_optional_dependencies;
+  /// you should set need_component_stats to true if you will not need the
+  /// average-activation and average-derivative statistics stored by the
+  /// StoreStats() functiopns of components/ such as Tanh, Sigmoid and Softmax.
+  bool store_component_stats;
 
-  // misc_info is for extensibility to things that don't easily fit into the framework
+  /// misc_info is for extensibility to things that don't easily fit into the
+  /// framework.
   MiscComputationInfo misc_info;
 
-  ComputationRequest(): need_model_derivative(false), use_optional_dependencies(true) { }
+  ComputationRequest(): need_model_derivative(false),
+                        store_component_stats(false) { }
 
-  // returns true if any of inputs[*].has_deriv is true, or model_to_update !=
-  // NULL.
+  /// returns true if any of inputs[*].has_deriv is true, or
+  /// need_model_derivative is true.
   bool NeedDerivatives() const;
+
+  /// Returns the index into "inputs" corresponding to the node with name
+  /// "node_name", or -1 if there is no such index.  It is an error if >1 inputs
+  /// have the same name.
+  int32 IndexForInput(const std::string &node_name) const;
+
+  /// Returns the index into "inputs" corresponding to the node with name
+  /// "node_name", or -1 if there is no such index.  It is an error if >1 inputs
+  /// have the same name.
+  int32 IndexForOutput(const std::string &node_name) const;
 };
 
 
@@ -113,6 +124,9 @@ struct NnetComputation {
   struct MatrixInfo {
     int32 num_rows;
     int32 num_cols;
+    MatrixInfo() { }
+    MatrixInfo(int32 num_rows, int32 num_cols):
+        num_rows(num_rows), num_cols(num_cols) {}
   };
   struct SubMatrixInfo {
     int32 matrix_index;  // index into "matrices": the underlying matrix.
@@ -128,8 +142,8 @@ struct NnetComputation {
   };
   enum CommandType {
     kResizeMatrixZeroed, kResizeMatrixUndefined,
-    kResizeMatrixEmpty, kPropagate, kBackprop, kMatrixCopy, kMatrixAdd,
-    kCopyRows, kAddRows,
+    kResizeMatrixEmpty, kPropagate, kStoreStats, kBackprop,
+    kMatrixCopy, kMatrixAdd, kCopyRows, kAddRows,
     kCopyRowsMulti, kCopyToRowsMulti, kAddRowsMulti, kAddToRowsMulti,
     kAddRowRanges, kNoOperation, kNoOperationMarker };
   struct Command {
@@ -138,6 +152,8 @@ struct NnetComputation {
     // kResizeMatrixEmpty: arg1 = index of matrix.
     // kPropagate: arg1 = index of component in nnet; arg2 is index of ComponentPrecomputedIndexes
     //   (0 if NULL); arg3, arg4 are sub-matrix indexes of matrix args (input and output)
+    // kStoreStats: arg1 = index of component in nnet; arg2 is sub-matrix index of the output
+    //    stored by Propagate (which is an input to the function).
     // kBackprop: arg1 = index of neural net node (only needed for debug);
     //    arg2 = index of component in nnet; arg3 is index of ComponentPrecomputedIndexes
     //   (0 if NULL); (arg4, arg5, arg6 and arg7) are respectively sub-matrix indexes of
@@ -220,7 +236,16 @@ struct NnetComputation {
   // computed from "indexes" by ComputeCudaIndexes(), but only
   // those that are used in the kAddRowRanges command are computed.
   std::vector<CuArray<Int32Pair> > indexes_multi_cuda;
-  
+
+
+  // Convenience function used when adding new matrices.  Returns the corresponding
+  // sub-matrix index, which may or not equal the actual matrix index.
+  int32 NewMatrix(int32 num_rows, int32 num_cols);
+
+  // Convenience function used when adding new sub-matrices.  Returns the new
+  // sub-matrix index.
+  int32 NewSubMatrix(int32 base_matrix, int32 dim_offset, int32 dim);
+
   // This must be called after setting up the computation but prior to actually
   // using the Computation object in a computation, to compute CUDA versions of
   // the indexes.

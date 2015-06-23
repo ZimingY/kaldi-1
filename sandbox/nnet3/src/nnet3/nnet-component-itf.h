@@ -1,6 +1,7 @@
 // nnet3/nnet-component-itf.h
 
 // Copyright      2015  Johns Hopkins University (author: Daniel Povey)
+//                2015  Guoguo Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -21,6 +22,7 @@
 #define KALDI_NNET3_NNET_COMPONENT_ITF_H_
 
 #include "nnet3/nnet-common.h"
+#include "nnet3/nnet-parse.h"
 #include "base/kaldi-error.h"
 #include "thread/kaldi-mutex.h"
 #include <iostream>
@@ -33,7 +35,6 @@ namespace nnet3 {
 // type for the bitmasks: instead use int32 for this type, e.g.
 // int32 properties = kSimpleComponent|kBackpropNeedsOutput.
 enum ComponentProperties {
-
   kSimpleComponent = 0x001,  // true if number of rows of input equals number of rows
                              // of output and this component doesn't care about the indexes
                              // (i.e. it maps each row of input to each row of output without
@@ -46,29 +47,30 @@ enum ComponentProperties {
                                // linear function of its parameters, i.e. alpha times
                                // parameters gives you alpha times output.  This is true
                                // for all updatable components we envisage.
-  kBackpropNeedsInput  = 0x010,  // true if backprop operation needs access to
-                                 // forward-pass input.
-  kBackpropNeedsOutput = 0x020,  // true if backprop operation needs access to
-                                 // forward-pass output (e.g. true for Sigmoid).
-  kPropagateInPlace = 0x040,  // true if we can do the propagate operation in-place
+  kPropagateInPlace = 0x010,  // true if we can do the propagate operation in-place
                               // (input and output matrices are the same).
                               // Note: if doing backprop, you'd also need to check
                               // that the kBackpropNeedsInput property is not true.
-  kBackpropInPlace = 0x080,   // true if we can do the backprop operation in-place
-                             // (input and output matrices may be the same).
-  kPropagateAdds = 0x100,  // true if the Propagate function adds to, rather
+  kPropagateAdds = 0x020,  // true if the Propagate function adds to, rather
                            // than setting, its output.  The Component chooses
                            // whether to add or set, and the calling code has to
                            // accommodate it.
-  kBackpropAdds = 0x200,   // true if the Backprop function adds to, rather than
-                           // setting, its output.  The Component chooses
+  kReordersIndexes = 0x040,  // true if the ReordersIndexes function might reorder
+                             // the indexes (otherwise we can skip calling it).
+  kBackpropAdds = 0x080,   // true if the Backprop function adds to, rather than
+                           // setting, the "in_deriv" output.  The Component chooses
                            // whether to add or set, and the calling code has to
                            // accommodate it.
-  kModifiesIndexes = 0x400,  // true if the ModifyIndexes function might modify
-                            // the indexes.
-  kAllowNoOptionalDependencies = 0x800  // true if we are to treat a Cindex as
-                                 // computable even if no optional dependencies
-                                 // were computable.
+  kBackpropNeedsInput  = 0x100,  // true if backprop operation needs access to
+                                 // forward-pass input.
+  kBackpropNeedsOutput = 0x200,  // true if backprop operation needs access to
+                                 // forward-pass output (e.g. true for Sigmoid).
+  kBackpropInPlace = 0x400,   // true if we can do the backprop operation in-place
+                             // (input and output matrices may be the same).
+  kStoresStats = 0x800       // true if the StoreStats operation stores
+                             // statistics e.g. on average node activations and
+                             // derivatives of the nonlinearity, (as it does for
+                             // Tanh, Sigmoid, ReLU and Softmax).
 };
 
 
@@ -86,6 +88,8 @@ class ComponentPrecomputedIndexes {
   virtual ~ComponentPrecomputedIndexes();
 };
 
+
+class IndexSet;  // Forward declaration; declared in nnet-computation-graph.h.
 
 /// Abstract base-class for neural-net components.
 class Component {
@@ -120,10 +124,12 @@ class Component {
   ///      Properties()&kBackpropNeedsOutput == 0
   ///   \param [in] out_deriv  The derivative at the output of this component.
   ///   \param [out] to_update  If model update is desired, the Component
-  ///       to be updated, else NULL.  Does not have to be idential to this.
+  ///       to be updated, else NULL.  Does not have to be identical to this.
   ///   \param [out] in_deriv   The derivative at the input of this component,
   ///       if needed (else NULL).   If  Properties()&kBackpropInPlace, may be
-  ///       the same matrix as out_deriv.
+  ///       the same matrix as out_deriv.  If Properties()&kBackpropAdds, this
+  ///       is added to by the Backprop routine, else it is set.  The component
+  ///       code chooses which mode to work in, based on convenience.
   virtual void Backprop(const std::string &debug_info,
                         const ComponentPrecomputedIndexes *indexes,
                         const CuMatrixBase<BaseFloat> &in_value,
@@ -133,8 +139,21 @@ class Component {
                                               // to "this" or different.
                         CuMatrixBase<BaseFloat> *in_deriv) const = 0;
 
-  /// \brief  For a given index at the output of the component, tells us what indexes
-  ///   are required at its input.
+
+  /// \brief This function may store stats on average activation values, and for
+  ///        some component types, the average value of the derivative of the
+  ///        nonlinearity.  It only does something for those components that
+  ///        have nonzero Properties()&kStoresStats.  It only needs as input
+  ///        the value at the output of the nonlinearity.
+
+  virtual void StoreStats(const CuMatrixBase<BaseFloat> &out_value) { }                      
+  
+
+  /// \brief  This function only does something interesting for non-simple Components.
+  ///   For a given index at the output of the component, tells us what indexes
+  ///   are required at its input (note: "required" encompasses also optionally-required
+  ///   things; it will enumerate all things that we'd like to have).  See also
+  ///   IsComputable().
   /// \param [in] misc_info  This argument is supplied to handle things that the
   ///       framework can't very easily supply: information like which time
   ///       indexes are needed for AggregateComponent, which time-indexes are
@@ -142,34 +161,75 @@ class Component {
   ///       add members to misc_info as needed.
   /// \param [in] output_index  The Index at the output of the component, for
   ///       which we are requesting the list of indexes at the component's input.
-  /// \param [out] input_indexes  A list of indexes that are definitely
-  ///        required at the input of this component.
-  /// \param [out] is_optional  Says, for each element of input_indexes, whether
-  ///        it can be considered optional (rather than required).  This is
-  ///        useful in things like RNNs and LSTMs to handle end effects at the
-  ///        start of the file.  If this function leaves the vector empty, the
-  ///        caller should assume all are required.  Note: the misc_info is
-  ///        supplied to give the code hints about, e.g., the min and max time
-  ///        indexes, so that the code doesn't have to nominate a ridiculously
-  ///        large number of optional indexes.
+  /// \param [out] desired_indexes  A list of indexes that are desired at the input.
+  ///       By "desired" we mean required or optionally-required.
   ///
   /// The default implementation of this function is suitable for any
   /// SimpleComponent; it just copies the output_index to a single identical
-  /// element in input_indexes, and sets is_optional to false.
+  /// element in input_indexes.
   virtual void GetInputIndexes(const MiscComputationInfo &misc_info,
                                const Index &output_index,
-                               std::vector<Index> *input_indexes,
-                               std::vector<bool> *is_optional) const;
+                               std::vector<Index> *desired_indexes) const;
 
-  /// \brief (For non-simple Components) Returns some precomputed
-  ///     component-specific and computation-specific indexes to be in used
-  ///     in the Propagate and Backprop functions.
+  /// \brief This function only does something interesting for non-simple
+  ///    Components, and it exists to make it possible to manage
+  ///    optionally-required inputs.  It tells the user whether a given output
+  ///    index is computable from a given set of input indexes, and if so,
+  ///    says which input indexes will be used in the computation.
+  ///
+  ///    Implementations of this function are required to have the property that
+  ///    adding an element to "input_index_set" can only ever change IsComputable
+  ///    from false to true, never vice versa.
+  ///
+  ///    @param [in] misc_info  Some information specific to the computation, such as
+  ///              minimum and maximum times for certain components to do adaptation on;
+  ///              it's a place to put things that don't easily fit in the framework.
+  ///    @param [in] output_index  The index that is to be computed at the output
+  ///              of this Component.
+  ///    @param [in] input_index_set  The set of indexes that is available at the
+  ///              input of this Component.
+  ///    @param [out] used_inputs  If non-NULL, then if the output is computable
+  ///       this will be set to the list of input indexes that will actually be
+  ///       used in the computation.
+  ///    @return Returns true iff this output is computable from the provided
+  ///          inputs.
+  ///
+  ///   The default implementation of this function is suitable for any
+  ///   SimpleComponent: it just returns true if output_index is in
+  ///   input_index_set, and if so sets used_inputs to vector containing that
+  ///   one Index.
+  virtual bool IsComputable(const MiscComputationInfo &misc_info,
+                            const Index &output_index,
+                            const IndexSet &input_index_set,
+                            std::vector<Index> *used_inputs) const;
+  
+  /// \brief This function only does something interesting for non-simple
+  ///  Components.  It provides an opportunity for a Component to reorder the
+  ///  indexes at its input and output.  This might be useful, for instance, if
+  ///  a component requires a particular ordering of the indexes that doesn't
+  ///  correspond to their natural ordering.  Components that might modify the
+  ///  indexes are brequired to return the kReordersIndexes flag in their
+  ///  Properties().
+  ///
+  ///  \param [in,out]  Indexes at the input of the Component.
+  ///  \param [in,out]  Indexes at the output of the Component
+  virtual void ReorderIndexes(std::vector<Index> *input_indexes,
+                              std::vector<Index> *output_indexes) const {}
+  
+
+  
+  /// \brief This function only returns non-NULL for non-simple Components (and
+  ///     may still return NULL for non-simple Compoennts).  Returns a pointer
+  ///     to a class that may contain some precomputed component-specific and
+  ///     computation-specific indexes to be in used in the Propagate and
+  ///     Backprop functions.
   ///
   /// \param [in] misc_info  This argument is supplied to handle things that the
   ///       framework can't very easily supply: information like which time
   ///       indexes are needed for AggregateComponent, which time-indexes are
-  ///       available at the input of a recurrent network, and so on.  We will
-  ///       add members to misc_info as needed.
+  ///       available at the input of a recurrent network, and so on.  misc_info
+  ///       may not even ever be used here.  We will add members to misc_info as
+  ///       needed.
   /// \param [in] input_indexes  A vector of indexes that explains
   ///       what time-indexes (and other indexes) each row of the
   ///       in/in_value/in_deriv matrices given to Propagate and Backprop will
@@ -191,29 +251,15 @@ class Component {
       bool need_backprop) const { return NULL;  }
 
 
-  /// \brief (for non-simple Components)
-  /// This function provides an opportunity for a Component to reorder the
-  /// indexes at its input and output and possibly remove some of the indexes at
-  /// its input that (after considering what else is available) it decides that
-  /// it does not need.  This might be useful, for instance, if a component
-  /// requires a particular ordering of the indexes that doesn't correspond to
-  /// their natural ordering.   Components that might modify the indexes are
-  /// required to return the kModifiesIndexes flag in their Properties().
-  ///
-  ///  \param [in,out]  Indexes at the input of the Component.
-  ///  \param [in,out]  Indexes at the output of the Component
-  virtual void ModifyIndexes(std::vector<Index> *input_indexes,
-                             std::vector<Index> *output_indexes) const {}
-  
-
   /// \brief Returns a string such as "SigmoidComponent", describing
   ///        the type of the object.
   virtual std::string Type() const = 0; 
 
-  /// \brief  Initialize, typically from a line of a config file.
-  /// \param [in] args  A string containing any parameters that need to be
-  ///            For example: "dim=100 param-stddev=0.1"
-  virtual void InitFromString(std::string args) = 0;
+  /// \brief  Initialize, from a ConfigLine object.
+  /// \param [in] cfl  A ConfigLine containing any parameters that
+  ///            are needed for initialization. For example: 
+  ///            "dim=100 param-stddev=0.1"
+  virtual void InitFromConfig(ConfigLine *cfl) = 0;
   
   /// \brief Returns input-dimension of this component.
   virtual int32 InputDim() const = 0;
@@ -226,7 +272,8 @@ class Component {
   ///   See enum ComponentProperties.
   virtual int32 Properties() const = 0;
 
-  /// \brief Read component from stream (works out its type)
+  /// \brief Read component from stream (works out its type).
+  ///     Dies on error.
   static Component* ReadNew(std::istream &is, bool binary);
 
   /// \brief Copies component (deep copy).
@@ -236,6 +283,7 @@ class Component {
   /// \param [in] initializer_line  Typically something like
   ///      "AffineComponent input-dim=1000 output-dim=1000"
   /// \return Returns newly created Component.
+  /// TODO: delete this.
   static Component *NewFromString(const std::string &initializer_line);
 
   /// \brief Returns a new Component of the given type e.g. "SoftmaxComponent",
@@ -347,8 +395,8 @@ class NonlinearComponent: public Component {
   virtual int32 InputDim() const { return dim_; }
   virtual int32 OutputDim() const { return dim_; }
   
-  /// We implement InitFromString at this level.
-  virtual void InitFromString(std::string args);
+  /// We implement InitFromConfig at this level.
+  virtual void InitFromConfig(ConfigLine *cfl);
   
   /// We implement Read at this level as it just needs the Type().
   virtual void Read(std::istream &is, bool binary);
@@ -374,13 +422,14 @@ class NonlinearComponent: public Component {
   friend class SigmoidComponent;
   friend class TanhComponent;
   friend class SoftmaxComponent;
+  friend class LogSoftmaxComponent;
   friend class RectifiedLinearComponent;
   
   // This function updates the stats "value_sum_", "deriv_sum_", and
   // count_. (If deriv == NULL, it won't update "deriv_sum_").
   // It will be called from the Backprop function of child classes.
-  void UpdateStats(const CuMatrixBase<BaseFloat> &out_value,
-                   const CuMatrixBase<BaseFloat> *deriv = NULL);
+  void StoreStatsInternal(const CuMatrixBase<BaseFloat> &out_value,
+                          const CuMatrixBase<BaseFloat> *deriv = NULL);
 
   
   const NonlinearComponent &operator = (const NonlinearComponent &other); // Disallow.

@@ -1,6 +1,7 @@
-// nnet3/nnet-component.cc
+// nnet3/nnet-simple-component.cc
 
 // Copyright      2015  Johns Hopkins University (author: Daniel Povey)
+//                2015  Guoguo Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -19,11 +20,8 @@
 
 #include <iterator>
 #include <sstream>
-#include "nnet3/nnet-component.h"
+#include "nnet3/nnet-simple-component.h"
 #include "nnet3/nnet-parse.h"
-
-// \file This file contains some more-generic component code: things in base classes.
-//       See nnet-component.cc for the code of the actual Components.
 
 namespace kaldi {
 namespace nnet3 {
@@ -37,15 +35,14 @@ void PnormComponent::Init(int32 input_dim, int32 output_dim)  {
   KALDI_ASSERT(input_dim_ % output_dim_ == 0);
 }
 
-void PnormComponent::InitFromString(std::string args) {
-  std::string orig_args(args);
+void PnormComponent::InitFromConfig(ConfigLine *cfl) {
   int32 input_dim = 0;
   int32 output_dim = 0;
-  bool ok = ParseFromString("output-dim", &args, &output_dim) &&
-      ParseFromString("input-dim", &args, &input_dim);
-  if (!ok || !args.empty() || output_dim <= 0)
+  bool ok = cfl->GetValue("output-dim", &output_dim) &&
+      cfl->GetValue("input-dim", &input_dim);
+  if (!ok || cfl->HasUnusedValues() || output_dim <= 0)
     KALDI_ERR << "Invalid initializer for layer of type "
-              << Type() << ": \"" << orig_args << "\"";
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
   Init(input_dim, output_dim);
 }
 
@@ -174,26 +171,39 @@ void SigmoidComponent::Backprop(const std::string &debug_info,
                                 const CuMatrixBase<BaseFloat> &,
                                 const CuMatrixBase<BaseFloat> &out_value,                        
                                 const CuMatrixBase<BaseFloat> &out_deriv,
-                                Component *to_update, // may be NULL; may be identical
-                                // to "this" or different.
+                                Component *,
                                 CuMatrixBase<BaseFloat> *in_deriv) const {
-  // The element by element equation would be:
-  // in_deriv = out_deriv * out_value * (1.0 - out_value);
-
-  // note, the following will work even if in_deriv == &out_deriv.
-  if (to_update == NULL) {
+  if (in_deriv != NULL)
     in_deriv->DiffSigmoid(out_value, out_deriv);
-  } else {
-    in_deriv->Set(1.0);
-    in_deriv->AddMat(-1.0, out_value);
-    // now in_deriv = 1.0 - out_value [element by element]
-    in_deriv->MulElements(out_value);
-    // now in_deriv = out_value * (1.0 - out_value) [element by element], i.e.
-    // it contains the element-by-element derivative of the nonlinearity.
-    dynamic_cast<NonlinearComponent*>(to_update)->UpdateStats(out_value,
-                                                              in_deriv);
-    in_deriv->MulElements(out_deriv);    
-  }
+}
+
+void SigmoidComponent::StoreStats(const CuMatrixBase<BaseFloat> &out_value) {
+  // derivative of the nonlinearity is out_value * (1.0 - out_value);  
+  CuMatrix<BaseFloat> temp_deriv(out_value.NumRows(), out_value.NumCols(),
+                                 kUndefined);
+  temp_deriv.Set(1.0);
+  temp_deriv.AddMat(-1.0, out_value);
+  temp_deriv.MulElements(out_value);
+  StoreStatsInternal(out_value, &temp_deriv);
+}
+
+
+
+void NoOpComponent::Propagate(const ComponentPrecomputedIndexes *indexes,
+                                 const CuMatrixBase<BaseFloat> &in,
+                                 CuMatrixBase<BaseFloat> *out) const {
+  out->CopyFromMat(in);
+}
+
+void NoOpComponent::Backprop(const std::string &debug_info,
+                             const ComponentPrecomputedIndexes *indexes,
+                             const CuMatrixBase<BaseFloat> &,
+                             const CuMatrixBase<BaseFloat> &,
+                             const CuMatrixBase<BaseFloat> &out_deriv,
+                             Component *to_update, // may be NULL; may be identical
+                             // to "this" or different.
+                             CuMatrixBase<BaseFloat> *in_deriv) const {
+  in_deriv->CopyFromMat(out_deriv);
 }
 
 void TanhComponent::Propagate(const ComponentPrecomputedIndexes *indexes,
@@ -213,31 +223,26 @@ void TanhComponent::Backprop(const std::string &debug_info,
                              Component *to_update, // may be NULL; may be identical
                              // to "this" or different.
                              CuMatrixBase<BaseFloat> *in_deriv) const {
-  // The element by element equation would be:
-  // in_deriv = out_deriv * out_value * (1.0 - out_value);
-
-  if (to_update == NULL) {  // don't need the stats on average derivatives...
+  if (in_deriv != NULL)
     in_deriv->DiffTanh(out_value, out_deriv);
-  } else {
-    /*
-      Note on the derivative of the tanh function:
-      tanh'(x) = sech^2(x) = -(tanh(x)+1) (tanh(x)-1) = 1 - tanh^2(x)
-
-      The element by element equation of what we're doing would be:
-      in_deriv = out_deriv * (1.0 - out_value^2).
-      We can accomplish this via calls to the matrix library. */
-
-    in_deriv->CopyFromMat(out_value);
-    in_deriv->ApplyPow(2.0);
-    in_deriv->Scale(-1.0);
-    in_deriv->Add(1.0);
-    // now in_deriv = (1.0 - out_value^2), the element-by-element derivative of
-    // the nonlinearity.
-    dynamic_cast<NonlinearComponent*>(to_update)->UpdateStats(out_value,
-                                                              in_deriv);
-    in_deriv->MulElements(out_deriv);    
-  }
 }
+
+/*
+  Note on the derivative of the tanh function:
+  tanh'(x) = sech^2(x) = -(tanh(x)+1) (tanh(x)-1) = 1 - tanh^2(x)
+
+  The element by element equation of what we're doing would be:
+  in_deriv = out_deriv * (1.0 - out_value^2).
+  We can accomplish this via calls to the matrix library. */
+void TanhComponent::StoreStats(const CuMatrixBase<BaseFloat> &out_value) {
+  // derivative of the onlinearity is out_value * (1.0 - out_value);  
+  CuMatrix<BaseFloat> temp_deriv(out_value);
+  temp_deriv.ApplyPow(2.0);
+  temp_deriv.Scale(-1.0);
+  temp_deriv.Add(1.0);
+  StoreStatsInternal(out_value, &temp_deriv);
+}
+
 
 void RectifiedLinearComponent::Propagate(
     const ComponentPrecomputedIndexes *indexes,
@@ -256,17 +261,18 @@ void RectifiedLinearComponent::Backprop(
     const CuMatrixBase<BaseFloat> &out_deriv,
     Component *to_update,
     CuMatrixBase<BaseFloat> *in_deriv) const {
-  in_deriv->CopyFromMat(out_value);
-  in_deriv->ApplyHeaviside();
-  // Now in_deriv(i, j) equals (out_value(i, j) > 0.0 ? 1.0 : 0.0),
-  // which is the derivative of the nonlinearity (well, except at zero
-  // where it's undefined).
-  if (to_update != NULL)
-    dynamic_cast<NonlinearComponent*>(to_update)->UpdateStats(out_value,
-                                                              in_deriv);
-  in_deriv->MulElements(out_deriv);
+  if (in_deriv != NULL) {
+    in_deriv->CopyFromMat(out_value);
+    in_deriv->ApplyHeaviside();
+  }
 }
 
+void RectifiedLinearComponent::StoreStats(
+    const CuMatrixBase<BaseFloat> &out_value) {
+  CuMatrix<BaseFloat> temp_deriv(out_value);
+  temp_deriv.ApplyHeaviside();
+  StoreStatsInternal(out_value, &temp_deriv);
+}  
 
 void AffineComponent::Scale(BaseFloat scale) {
   linear_params_.Scale(scale);
@@ -390,37 +396,38 @@ void AffineComponent::Init(BaseFloat learning_rate,
   bias_params_.CopyColFromMat(mat, input_dim);
 }
 
-void AffineComponent::InitFromString(std::string args) {
-  std::string orig_args(args);
+void AffineComponent::InitFromConfig(ConfigLine *cfl) {
   bool ok = true;
   BaseFloat learning_rate = learning_rate_;
   std::string matrix_filename;
   int32 input_dim = -1, output_dim = -1;
-  ParseFromString("learning-rate", &args, &learning_rate); // optional.
-  if (ParseFromString("matrix", &args, &matrix_filename)) {
+  cfl->GetValue("learning-rate", &learning_rate); // optional.
+  if (cfl->GetValue("matrix", &matrix_filename)) {
     Init(learning_rate, matrix_filename);
-    if (ParseFromString("input-dim", &args, &input_dim))
+    if (cfl->GetValue("input-dim", &input_dim))
       KALDI_ASSERT(input_dim == InputDim() &&
                    "input-dim mismatch vs. matrix.");
-    if (ParseFromString("output-dim", &args, &output_dim))
+    if (cfl->GetValue("output-dim", &output_dim))
       KALDI_ASSERT(output_dim == OutputDim() &&
                    "output-dim mismatch vs. matrix.");
   } else {
-    ok = ok && ParseFromString("input-dim", &args, &input_dim);
-    ok = ok && ParseFromString("output-dim", &args, &output_dim);
+    ok = ok && cfl->GetValue("input-dim", &input_dim);
+    ok = ok && cfl->GetValue("output-dim", &output_dim);
     BaseFloat param_stddev = 1.0 / std::sqrt(input_dim),
         bias_stddev = 1.0;
-    ParseFromString("param-stddev", &args, &param_stddev);
-    ParseFromString("bias-stddev", &args, &bias_stddev);
+    cfl->GetValue("param-stddev", &param_stddev);
+    cfl->GetValue("bias-stddev", &bias_stddev);
     Init(learning_rate, input_dim, output_dim,
          param_stddev, bias_stddev);
   }
-  if (!args.empty())
+  if (cfl->HasUnusedValues())
     KALDI_ERR << "Could not process these elements in initializer: "
-              << args;
+              << cfl->UnusedValues();
   if (!ok)
-    KALDI_ERR << "Bad initializer " << orig_args;
+    KALDI_ERR << "Bad initializer " << cfl->WholeLine();
 }
+
+
 
 
 void AffineComponent::Propagate(const ComponentPrecomputedIndexes *indexes,
@@ -609,9 +616,7 @@ void NaturalGradientAffineComponent::Read(std::istream &is, bool binary) {
   ExpectToken(is, binary, ostr_end.str());
   SetNaturalGradientConfigs();
 }
-
-void NaturalGradientAffineComponent::InitFromString(std::string args) {
-  std::string orig_args(args);
+void NaturalGradientAffineComponent::InitFromConfig(ConfigLine *cfl) {
   bool ok = true;
   std::string matrix_filename;
   BaseFloat learning_rate = learning_rate_;
@@ -619,40 +624,40 @@ void NaturalGradientAffineComponent::InitFromString(std::string args) {
       max_change_per_sample = 0.075;
   int32 input_dim = -1, output_dim = -1, rank_in = 20, rank_out = 80,
       update_period = 4;
-  ParseFromString("learning-rate", &args, &learning_rate); // optional.
-  ParseFromString("num-samples-history", &args, &num_samples_history);
-  ParseFromString("alpha", &args, &alpha);
-  ParseFromString("max-change-per-sample", &args, &max_change_per_sample);
-  ParseFromString("rank-in", &args, &rank_in);
-  ParseFromString("rank-out", &args, &rank_out);
-  ParseFromString("update-period", &args, &update_period);
+  cfl->GetValue("learning-rate", &learning_rate); // optional.
+  cfl->GetValue("num-samples-history", &num_samples_history);
+  cfl->GetValue("alpha", &alpha);
+  cfl->GetValue("max-change-per-sample", &max_change_per_sample);
+  cfl->GetValue("rank-in", &rank_in);
+  cfl->GetValue("rank-out", &rank_out);
+  cfl->GetValue("update-period", &update_period);
 
-  if (ParseFromString("matrix", &args, &matrix_filename)) {
+  if (cfl->GetValue("matrix", &matrix_filename)) {
     Init(learning_rate, rank_in, rank_out, update_period,
          num_samples_history, alpha, max_change_per_sample,
          matrix_filename);
-    if (ParseFromString("input-dim", &args, &input_dim))
+    if (cfl->GetValue("input-dim", &input_dim))
       KALDI_ASSERT(input_dim == InputDim() &&
                    "input-dim mismatch vs. matrix.");
-    if (ParseFromString("output-dim", &args, &output_dim))
+    if (cfl->GetValue("output-dim", &output_dim))
       KALDI_ASSERT(output_dim == OutputDim() &&
                    "output-dim mismatch vs. matrix.");
   } else {
-    ok = ok && ParseFromString("input-dim", &args, &input_dim);
-    ok = ok && ParseFromString("output-dim", &args, &output_dim);
+    ok = ok && cfl->GetValue("input-dim", &input_dim);
+    ok = ok && cfl->GetValue("output-dim", &output_dim);
     BaseFloat param_stddev = 1.0 / std::sqrt(input_dim),
         bias_stddev = 1.0;
-    ParseFromString("param-stddev", &args, &param_stddev);
-    ParseFromString("bias-stddev", &args, &bias_stddev);
+    cfl->GetValue("param-stddev", &param_stddev);
+    cfl->GetValue("bias-stddev", &bias_stddev);
     Init(learning_rate, input_dim, output_dim, param_stddev,
          bias_stddev, rank_in, rank_out, update_period,
          num_samples_history, alpha, max_change_per_sample);
   }
-  if (!args.empty())
+  if (cfl->HasUnusedValues())
     KALDI_ERR << "Could not process these elements in initializer: "
-              << args;
+              << cfl->UnusedValues();
   if (!ok)
-    KALDI_ERR << "Bad initializer " << orig_args;
+    KALDI_ERR << "Bad initializer " << cfl->WholeLine();
 }
 
 void NaturalGradientAffineComponent::SetNaturalGradientConfigs() {
@@ -872,6 +877,89 @@ void NaturalGradientAffineComponent::Update(
                            in_value_precon_part, kNoTrans, 1.0);
 }
 
+std::string FixedAffineComponent::Info() const {
+  std::stringstream stream;
+  BaseFloat linear_params_size =
+      static_cast<BaseFloat>(linear_params_.NumRows())
+      * static_cast<BaseFloat>(linear_params_.NumCols());
+  BaseFloat linear_params_stddev =
+      std::sqrt(TraceMatMat(linear_params_,
+                            linear_params_, kTrans) / linear_params_size);
+  BaseFloat bias_params_stddev =
+      std::sqrt(VecVec(bias_params_, bias_params_) / bias_params_.Dim());
+
+  stream << Component::Info() << ", linear-params-stddev="
+      << linear_params_stddev << ", bias-params-stddev=" << bias_params_stddev;
+  return stream.str();
+}
+
+void FixedAffineComponent::Init(const CuMatrixBase<BaseFloat> &mat) {
+  KALDI_ASSERT(mat.NumCols() > 1);
+  linear_params_ = mat.Range(0, mat.NumRows(), 0, mat.NumCols() - 1);
+  bias_params_.Resize(mat.NumRows());
+  bias_params_.CopyColFromMat(mat, mat.NumCols() - 1);
+}
+
+void FixedAffineComponent::InitFromConfig(ConfigLine *cfl) {
+  std::string filename;
+  bool ok = cfl->GetValue("matrix", &filename);
+
+  if (!ok || cfl->HasUnusedValues())
+    KALDI_ERR << "Invalid initializer for layer of type "
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
+
+  bool binary;
+  Input ki(filename, &binary);
+  CuMatrix<BaseFloat> mat;
+  mat.Read(ki.Stream(), binary);
+  KALDI_ASSERT(mat.NumRows() != 0);
+  Init(mat);
+}
+
+void FixedAffineComponent::Propagate(const ComponentPrecomputedIndexes *indexes,
+                                     const CuMatrixBase<BaseFloat> &in,
+                                     CuMatrixBase<BaseFloat> *out) const  {
+  out->CopyRowsFromVec(bias_params_); // Adds the bias term first.
+  out->AddMatMat(1.0, in, kNoTrans, linear_params_, kTrans, 1.0);
+}
+
+void FixedAffineComponent::Backprop(const std::string &debug_info,
+                                    const ComponentPrecomputedIndexes *indexes,
+                                    const CuMatrixBase<BaseFloat> &, //in_value
+                                    const CuMatrixBase<BaseFloat> &, //out_value
+                                    const CuMatrixBase<BaseFloat> &out_deriv,
+                                    Component *, //to_update
+                                    CuMatrixBase<BaseFloat> *in_deriv) const {
+  // kBackpropAdds is true. It's the user's responsibility to zero out
+  // <in_deriv> if they need it to be so.
+  if (in_deriv)
+    in_deriv->AddMatMat(1.0, out_deriv, kNoTrans,
+                        linear_params_, kNoTrans, 1.0);
+}
+
+Component* FixedAffineComponent::Copy() const {
+  FixedAffineComponent *ans = new FixedAffineComponent();
+  ans->linear_params_ = linear_params_;
+  ans->bias_params_ = bias_params_;
+  return ans;
+}
+
+void FixedAffineComponent::Write(std::ostream &os, bool binary) const {
+  WriteToken(os, binary, "<FixedAffineComponent>");
+  WriteToken(os, binary, "<LinearParams>");
+  linear_params_.Write(os, binary);
+  WriteToken(os, binary, "<BiasParams>");
+  bias_params_.Write(os, binary);
+  WriteToken(os, binary, "</FixedAffineComponent>");
+}
+
+void FixedAffineComponent::Read(std::istream &is, bool binary) {
+  ExpectOneOrTwoTokens(is, binary, "<FixedAffineComponent>", "<LinearParams>");
+  linear_params_.Read(is, binary);
+  ExpectToken(is, binary, "<BiasParams>");
+  bias_params_.Read(is, binary);
+  ExpectToken(is, binary, "</FixedAffineComponent>");
+}
 
 void SumGroupComponent::Init(const std::vector<int32> &sizes) {
   KALDI_ASSERT(!sizes.empty());
@@ -892,14 +980,13 @@ void SumGroupComponent::Init(const std::vector<int32> &sizes) {
   this->output_dim_ = sizes.size();
 }
 
-void SumGroupComponent::InitFromString(std::string args) {
-  std::string orig_args(args);
+void SumGroupComponent::InitFromConfig(ConfigLine *cfl) {
   std::vector<int32> sizes;
-  bool ok = ParseFromString("sizes", &args, &sizes);
+  bool ok = cfl->GetValue("sizes", &sizes);
 
-  if (!ok || !args.empty() || sizes.empty())
+  if (!ok || cfl->HasUnusedValues() || sizes.empty())
     KALDI_ERR << "Invalid initializer for layer of type "
-              << Type() << ": \"" << orig_args << "\"";
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
   this->Init(sizes);
 }
 
@@ -984,6 +1071,8 @@ void SoftmaxComponent::Backprop(const std::string &debug_info,
                                 const CuMatrixBase<BaseFloat> &out_deriv,
                                 Component *to_update_in,
                                 CuMatrixBase<BaseFloat> *in_deriv) const {
+  if (in_deriv == NULL)
+    return;
   /*
     Note on the derivative of the softmax function: let it be
     p_i = exp(x_i) / sum_i exp_i
@@ -1004,31 +1093,70 @@ void SoftmaxComponent::Backprop(const std::string &debug_info,
   pe_vec.AddDiagMatMat(1.0, P, kNoTrans, E, kTrans, 0.0);
 
   D.AddDiagVecMat(-1.0, pe_vec, P, kNoTrans, 1.0); // does D -= diag(pe_vec) * P.
-  
-  // The SoftmaxComponent does not have any real trainable parameters, but
-  // during the backprop we store some statistics on the average counts;
-  // these used to be used in mixing-up, and may be of interest for some
-  // debugging and diagnostics.
-  if (to_update_in != NULL) {
-    NonlinearComponent *to_update =
-        dynamic_cast<NonlinearComponent*>(to_update_in);
-    to_update->UpdateStats(out_value);
-  }
 }
+
+void SoftmaxComponent::StoreStats(const CuMatrixBase<BaseFloat> &out_value) {
+  // We don't store derivative stats for this component type, just activation
+  // stats.
+  StoreStatsInternal(out_value, NULL);
+}  
+
+
+void LogSoftmaxComponent::Propagate(const ComponentPrecomputedIndexes *indexes,
+                                    const CuMatrixBase<BaseFloat> &in,
+                                    CuMatrixBase<BaseFloat> *out) const {
+  // Applies log softmax function to each row of the output. For each row, we do
+  // x_i = x_i - log(sum_j exp(x_j))
+  out->ApplyLogSoftMaxPerRow(in);
+}
+
+void LogSoftmaxComponent::Backprop(const std::string &debug_info,
+                                   const ComponentPrecomputedIndexes *indexes,
+                                   const CuMatrixBase<BaseFloat> &, // in_value
+                                   const CuMatrixBase<BaseFloat> &out_value,
+                                   const CuMatrixBase<BaseFloat> &out_deriv,
+                                   Component *, // to_update
+                                   CuMatrixBase<BaseFloat> *in_deriv) const {
+  if (in_deriv == NULL)
+    return;
+
+  /*
+    Let the output be y, then
+      y_i = x_i - log(sum_i exp(x_i))
+    where x_i is the input to the component. The Jacobian matrix of this
+    function is
+      J = I - 1 exp(y^T)
+    where 1 is a vector of ones. Let the derivative vector at the output be e,
+    and at the input be d, then we have
+      d = e - exp(y) Sum(e)
+      d_i = e_i - exp(y_i) Sum(e)
+  */
+  const CuMatrixBase<BaseFloat> &Y(out_value), &E(out_deriv);
+  CuMatrixBase<BaseFloat> &D (*in_deriv);
+
+  D.CopyFromMat(Y);
+  D.ApplyExp();                           // exp(y)
+  CuVector<BaseFloat> E_sum(D.NumRows()); // Initializes to zero
+  E_sum.AddColSumMat(1.0, E);             // Sum(e)
+  D.MulRowsVec(E_sum);                    // exp(y) Sum(e)
+  D.Scale(-1.0);                          // - exp(y) Sum(e)
+  D.AddMat(1.0, E, kNoTrans);             // e - exp(y_i) Sum(e)
+}
+
 
 void FixedScaleComponent::Init(const CuVectorBase<BaseFloat> &scales) {
   KALDI_ASSERT(scales.Dim() != 0);
   scales_ = scales;
 }
 
-void FixedScaleComponent::InitFromString(std::string args) {
-  std::string orig_args = args;
-  std::string filename;
-  bool ok = ParseFromString("scales", &args, &filename);
 
-  if (!ok || !args.empty())
+void FixedScaleComponent::InitFromConfig(ConfigLine *cfl) {
+  std::string filename;
+  bool ok = cfl->GetValue("scales", &filename);
+
+  if (!ok || cfl->HasUnusedValues())
     KALDI_ERR << "Invalid initializer for layer of type "
-              << Type() << ": \"" << orig_args << "\"";
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
 
   CuVector<BaseFloat> vec;
   ReadKaldiObject(filename, &vec);
@@ -1090,20 +1218,18 @@ void FixedBiasComponent::Init(const CuVectorBase<BaseFloat> &bias) {
   bias_ = bias;
 }
 
-void FixedBiasComponent::InitFromString(std::string args) {
-  std::string orig_args = args;
+void FixedBiasComponent::InitFromConfig(ConfigLine *cfl) {
   std::string filename;
-  bool ok = ParseFromString("bias", &args, &filename);
+  bool ok = cfl->GetValue("bias", &filename);
 
-  if (!ok || !args.empty())
+  if (!ok || cfl->HasUnusedValues())
     KALDI_ERR << "Invalid initializer for layer of type "
-              << Type() << ": \"" << orig_args << "\"";
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
 
   CuVector<BaseFloat> vec;
   ReadKaldiObject(filename, &vec);
   Init(vec);
 }
-
 
 std::string FixedBiasComponent::Info() const {
   std::stringstream stream;

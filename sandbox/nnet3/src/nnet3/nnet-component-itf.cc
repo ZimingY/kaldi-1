@@ -1,6 +1,7 @@
 // nnet3/nnet-component-itf.cc
 
 // Copyright      2015  Johns Hopkins University (author: Daniel Povey)
+//                2015  Guoguo Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -20,8 +21,10 @@
 #include <iterator>
 #include <sstream>
 #include "nnet3/nnet-component-itf.h"
-#include "nnet3/nnet-component.h"
+#include "nnet3/nnet-simple-component.h"
+#include "nnet3/nnet-general-component.h"
 #include "nnet3/nnet-parse.h"
+#include "nnet3/nnet-computation-graph.h"
 
 // \file This file contains some more-generic component code: things in base classes.
 //       See nnet-component.cc for the code of the actual Components.
@@ -52,6 +55,8 @@ Component* Component::NewComponentOfType(const std::string &component_type) {
     ans = new TanhComponent();
   } else if (component_type == "SoftmaxComponent") {
     ans = new SoftmaxComponent();
+  } else if (component_type == "LogSoftmaxComponent") {
+    ans = new LogSoftmaxComponent();
   } else if (component_type == "RectifiedLinearComponent") {
     ans = new RectifiedLinearComponent();
   } else if (component_type == "NormalizeComponent") {
@@ -81,11 +86,15 @@ Component* Component::NewFromString(const std::string &initializer_line) {
   istr >> component_type >> std::ws;
   std::string rest_of_line;
   getline(istr, rest_of_line);
+  ConfigLine cfl;
+  if (!cfl.ParseLine(rest_of_line))
+    KALDI_ERR << "Bad config line: "
+              << rest_of_line;
   Component *ans = NewComponentOfType(component_type);
   if (ans == NULL)
     KALDI_ERR << "Bad initializer line (no such type of Component): "
               << initializer_line;
-  ans->InitFromString(rest_of_line);
+  ans->InitFromConfig(&cfl);
   return ans;
 }
 
@@ -98,12 +107,25 @@ std::string Component::Info() const {
 
 void Component::GetInputIndexes(const MiscComputationInfo &misc_info,
                                 const Index &output_index,
-                                std::vector<Index> *input_indexes,
-                                std::vector<bool> *is_optional) const {
+                                std::vector<Index> *input_indexes) const {
   input_indexes->resize(1);
   (*input_indexes)[0] = output_index;
-  is_optional->resize(1, false);  // by default no inputs are optional.
 }
+
+bool Component::IsComputable(const MiscComputationInfo &misc_info,
+                             const Index &output_index,
+                             const IndexSet &input_index_set,
+                             std::vector<Index> *used_inputs) const {
+  // the default Component dependency is for an output index to map directly to
+  // the same input index, which is required to compute the output.
+  if (!input_index_set(output_index))
+    return false;
+  used_inputs->clear();
+  used_inputs->push_back(output_index);
+  return true;
+}
+
+
 
 void UpdatableComponent::Init(BaseFloat lr, bool is_gradient) {
   learning_rate_ = lr;
@@ -120,8 +142,9 @@ std::string UpdatableComponent::Info() const {
   return stream.str();
 }
 
-void NonlinearComponent::UpdateStats(const CuMatrixBase<BaseFloat> &out_value,
-                                     const CuMatrixBase<BaseFloat> *deriv) {
+void NonlinearComponent::StoreStatsInternal(
+    const CuMatrixBase<BaseFloat> &out_value,
+    const CuMatrixBase<BaseFloat> *deriv) {
   KALDI_ASSERT(out_value.NumCols() == InputDim());
   // Check we have the correct dimensions.
   if (value_sum_.Dim() != InputDim() ||
@@ -211,18 +234,14 @@ NonlinearComponent::NonlinearComponent(const NonlinearComponent &other):
     dim_(other.dim_), value_sum_(other.value_sum_), deriv_sum_(other.deriv_sum_),
     count_(other.count_) { }
 
-void NonlinearComponent::InitFromString(std::string args) {
-  std::string orig_args(args);
+void NonlinearComponent::InitFromConfig(ConfigLine *cfl) {
   int32 dim;
-  bool ok = ParseFromString("dim", &args, &dim);
-  if (!ok || !args.empty() || dim <= 0)
+  bool ok = cfl->GetValue("dim", &dim);
+  if (!ok || cfl->HasUnusedValues() || dim <= 0)
     KALDI_ERR << "Invalid initializer for layer of type "
-              << Type() << ": \"" << orig_args << "\"";
+              << Type() << ": \"" << cfl->WholeLine() << "\"";
   Init(dim);
 }
-
-
-
 
 } // namespace nnet3
 } // namespace kaldi

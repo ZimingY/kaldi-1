@@ -23,12 +23,52 @@ namespace kaldi {
 namespace nnet3 {
 
 bool ComputationRequest::NeedDerivatives() const {
+  bool ans = false;
   if (need_model_derivative)
-    return true;
-  for (size_t i = 0; i < inputs.size(); i++)
-    if (inputs[i].has_deriv)  // derivative requested for this input
-      return true;
+    ans = true;
+  for (size_t i = 0; i < inputs.size(); i++) {
+    if (inputs[i].has_deriv) { // derivative requested for this input
+      ans = true;
+      break;
+    }
+  }
+  if (ans) {
+    // check that the output actually provides a derivative, else the
+    // request could not be meaningfully satisfied.
+    size_t i;
+    for (i = 0; i < outputs.size(); i++)
+      if (outputs[i].has_deriv)
+        break;
+    if (i == outputs.size()) {
+      KALDI_ERR << "You requested model derivatives or input derivatives, but "
+                << "provide no derivatives at the output.";
+    }
+  }
   return false;
+}
+
+int32 ComputationRequest::IndexForInput(
+    const std::string &node_name) const {
+  int32 ans = -1;
+  for (size_t i = 0; i < inputs.size(); i++) {
+    if (inputs[i].name == node_name) {
+      KALDI_ASSERT(ans == -1 && "Two inputs with the same name");
+      ans = i;
+    }
+  }
+  return ans;
+}
+
+int32 ComputationRequest::IndexForOutput(
+    const std::string &node_name) const {
+  int32 ans = -1;
+  for (size_t i = 0; i < outputs.size(); i++) {
+    if (outputs[i].name == node_name) {
+      KALDI_ASSERT(ans == -1 && "Two inputs with the same name");
+      ans = i;
+    }
+  }
+  return ans;
 }
 
 NnetComputation::~NnetComputation() {
@@ -63,6 +103,36 @@ void NnetComputation::ComputeCudaIndexes() {
     }
   }
 }
+
+int32 NnetComputation::NewSubMatrix(int32 base_matrix, int32 dim_offset,
+                                    int32 dim) {
+  KALDI_ASSERT(static_cast<size_t>(base_matrix) < matrices.size());
+  int32 num_rows = matrices[base_matrix].num_rows,
+      num_cols = matrices[base_matrix].num_cols;
+  KALDI_ASSERT(dim_offset >= 0 && dim_offset + dim <= num_cols);
+  int32 ans = sub_matrices.size();
+  KALDI_ASSERT(ans >= matrices.size());
+  sub_matrices.push_back(
+      NnetComputation::SubMatrixInfo(base_matrix, 0, num_rows,
+                                     dim_offset, dim));
+  return ans;
+}
+  
+int32 NnetComputation::NewMatrix(int32 num_rows, int32 num_cols) {
+  KALDI_ASSERT(num_rows > 0 && num_cols && 0 &&
+               matrices.size() == sub_matrices.size());
+  if (matrices.empty()) {  // Set up the zero matrix; index zero is reserved.
+    matrices.push_back(MatrixInfo(0, 0));
+    sub_matrices.push_back(SubMatrixInfo(0, 0, 0, 0, 0));
+  }
+  int32 matrix_index = matrices.size(),
+      submatrix_index = sub_matrices.size();
+  matrices.push_back(MatrixInfo(num_rows, num_cols));
+  sub_matrices.push_back(SubMatrixInfo(matrix_index, 0, num_rows, 0, num_cols));
+  return submatrix_index;
+}
+
+  
 
 } // namespace nnet3
 } // namespace kaldi

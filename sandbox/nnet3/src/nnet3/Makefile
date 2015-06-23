@@ -7,12 +7,17 @@ LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 
 
-TESTFILES = natural-gradient-online-test 
+TESTFILES = natural-gradient-online-test nnet-graph-test \
+						nnet-descriptor-test nnet-parse-test  \
+						nnet-compile-utils-test nnet-nnet-test
 
-OBJFILES = nnet-compile.o nnet-component.o nnet-parse.o natural-gradient-online.o \
-  nnet-component-itf.o nnet-optimize.o nnet-computation.o \
-  nnet-computation-graph.o nnet-graph.o nnet-utils.o am-nnet-simple.o \
-  nnet-compute.o nnet-example.o nnet-common.o 
+OBJFILES = nnet-common.o nnet-compile.o nnet-component-itf.o \
+  nnet-simple-component.o \
+  nnet-general-component.o nnet-parse.o natural-gradient-online.o \
+  nnet-descriptor.o nnet-optimize.o nnet-computation.o \
+  nnet-computation-graph.o nnet-graph.o am-nnet-simple.o \
+  nnet-example.o nnet-nnet.o nnet-compile-utils.o nnet-nnet.o \
+  nnet-compute.o nnet-test.o
 
 LIBNAME = kaldi-nnet3
 

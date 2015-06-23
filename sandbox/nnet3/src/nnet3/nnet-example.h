@@ -22,8 +22,10 @@
 #define KALDI_NNET3_NNET_EXAMPLE_H_
 
 #include "nnet3/nnet-nnet.h"
+#include "hmm/posterior.h"
 #include "util/table-types.h"
 #include "lat/kaldi-lattice.h"
+#include "hmm/posterior.h"
 #include "thread/kaldi-semaphore.h"
 
 namespace kaldi {
