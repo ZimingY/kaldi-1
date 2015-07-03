@@ -31,6 +31,12 @@
 namespace kaldi {
 namespace nnet3 {
 
+struct CompilerOptions {
+  bool output_debug_info;
+
+  CompilerOptions(): output_debug_info(true) { }
+};
+
 // This class creates an initial version of the NnetComputation, without any
 // optimization or sharing of matrices.  
 class Compiler {
@@ -38,7 +44,8 @@ class Compiler {
   Compiler(const ComputationRequest &request,
            const Nnet &nnet);
   
-  void CreateComputation(NnetComputation *computation);
+  void CreateComputation(const CompilerOptions &opts,
+                         NnetComputation *computation);
 
  private:
   const ComputationRequest &request_;
@@ -128,7 +135,8 @@ class Compiler {
   // Adds to the computation object the information about the matrix sizes
   void DefineMatrices(NnetComputation *computation) const;
 
-  // sets up the input_output_info of the computation.
+  // sets up the input_output_info of the computation (this says where the
+  // values and derivatives for the inputs and outputs live).
   void SetInputOutputInfo(NnetComputation *computation) const;
 
   // Sets up sub-matrix indexes for nodes of type Descriptor (needed mainly
@@ -138,7 +146,7 @@ class Compiler {
 
   // Adds to the computation object the commands to set up the matrices.
   void SetUpMatrices(NnetComputation *computation) const;
-
+  
   // Sets up the precomputed indexes for each component, and sets the
   // precomputed_indexes_index value for each step.
   void SetUpPrecomputedIndexes(NnetComputation *computation);
@@ -263,18 +271,23 @@ class Compiler {
       NnetComputation *computation) const;
   
   
-  // [to be called after step_info_ is set up and all the forward and backprop
+  // [to be called after steps_ is set up and all the forward and backprop
   // commands have been added].  Adds to the computation the commands that
   // deinitialize all the matrices, except those that may be requested by
   // the user after the computation is done (i.e. outputs of the network,
   // and input derivatives).
   void DestroyMatrices(NnetComputation *computation);
 
+  // sets up the debug_info member of "computation".
+  void OutputDebugInfo(NnetComputation *computation) const;
+  
   void AddCommands(const std::vector<bool> &deriv_needed,
                    NnetComputation *computation);
 
 };
 
+// TODO: make sure inputs don't have resize commands to set up the sizes, and
+// outputs don't have resize commands to empty them.
 
 
 } // namespace nnet3

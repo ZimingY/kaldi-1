@@ -1,6 +1,6 @@
 // nnet3/nnet-nnet-test.cc
 
-// Copyright 2015  Vimal Manohar (Johns Hopkins University)
+// Copyright 2015  Johns Hopkins University (author: Daniel Povey)
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -38,7 +38,6 @@ void UnitTestNnetIo() {
     std::ostringstream os;
     nnet.Write(os, binary);
     const std::string &original_output = os.str();
-
     std::istringstream nnet_is(original_output);
     nnet.Read(nnet_is, binary);
     std::istringstream nnet_is2(original_output);
@@ -47,9 +46,12 @@ void UnitTestNnetIo() {
       
     std::ostringstream os2, os3;
     nnet.Write(os2, binary);
+    
     nnet2.Write(os3, binary);
-    KALDI_ASSERT(os2.str() == original_output);
-    KALDI_ASSERT(os3.str() == original_output);
+    if (binary) {
+      KALDI_ASSERT(os2.str() == original_output);
+      KALDI_ASSERT(os3.str() == original_output);
+    }
   }
 }
 

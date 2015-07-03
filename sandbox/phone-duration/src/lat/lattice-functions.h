@@ -4,6 +4,7 @@
 //           2012-2013   Johns Hopkins University (Author: Daniel Povey);
 //                       Bagher BabaAli
 //                2014   Guoguo Chen
+//                2015   David Snyder
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -26,6 +27,8 @@
 
 #include <vector>
 #include <map>
+#include <string>
+#include <set>
 
 #include "base/kaldi-common.h"
 #include "hmm/posterior.h"
@@ -62,6 +65,17 @@ int32 CompactLatticeStateTimes(const CompactLattice &clat,
 BaseFloat LatticeForwardBackward(const Lattice &lat,
                                  Posterior *arc_post,
                                  double *acoustic_like_sum = NULL);
+
+// This function is something similar to LatticeForwardBackward(), but it is on
+// the CompactLattice lattice format. Also we only need the alpha in the forward
+// path, not the posteriors.
+bool ComputeCompactLatticeAlphas(const CompactLattice &lat,
+                                 vector<double> *alpha);
+
+// A sibling of the function CompactLatticeAlphas()... We compute the beta from
+// the backward path here.
+bool ComputeCompactLatticeBetas(const CompactLattice &lat,
+                                vector<double> *beta);
 
 /// Topologically sort the compact lattice if not already topologically sorted.
 /// Will crash if the lattice cannot be topologically sorted.
@@ -295,6 +309,20 @@ void ComposeCompactLatticeDeterministic(
     fst::DeterministicOnDemandFst<fst::StdArc>* det_fst,
     CompactLattice* composed_clat);
 
+/// This function returns true if the CompactLattice clat has unique
+/// left phone context of length n, and false if it does not.
+bool HasUniquePhoneContext(const CompactLattice &clat,
+       const TransitionModel &tmodel, int32 n);
+
+/// This function expands a CompactLattice so that each state in
+/// the lattice has a unique left phone context up to the length n.
+/// The expanded lattice is returned in clat_expanded.  Before using this
+/// function be sure that lattice-align-phones is applied to the lattice
+/// with the option remove-epsilon set to false.
+void CompactLatticeExpandByPhone(const CompactLattice &clat,
+    int32 n,
+    const TransitionModel &tmodel,
+    CompactLattice *clat_expanded);
 }  // namespace kaldi
 
 #endif  // KALDI_LAT_LATTICE_FUNCTIONS_H_
