@@ -70,8 +70,8 @@ void FasterDecoder::AdvanceDecoding(DecodableInterface *decodable,
   while (num_frames_decoded_ < target_frames_decoded) {
     // note: ProcessEmitting() increments num_frames_decoded_
     double weight_cutoff = ProcessEmitting(decodable);
-    ProcessNonemitting(weight_cutoff); 
-  }    
+    ProcessNonemitting(weight_cutoff);
+  }
 }
 
 
@@ -178,7 +178,7 @@ double FasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
     double beam_cutoff = best_cost + config_.beam,
         min_active_cutoff = std::numeric_limits<double>::infinity(),
         max_active_cutoff = std::numeric_limits<double>::infinity();
-    
+
     if (tmp_array_.size() > static_cast<size_t>(config_.max_active)) {
       std::nth_element(tmp_array_.begin(),
                        tmp_array_.begin() + config_.max_active,
@@ -189,7 +189,7 @@ double FasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
       if (adaptive_beam)
         *adaptive_beam = max_active_cutoff - best_cost + config_.beam_delta;
       return max_active_cutoff;
-    }    
+    }
     if (tmp_array_.size() > static_cast<size_t>(config_.min_active)) {
       if (config_.min_active == 0) min_active_cutoff = best_cost;
       else {
@@ -231,12 +231,12 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
                                    &adaptive_beam, &best_elem);
   KALDI_VLOG(3) << tok_cnt << " tokens active.";
   PossiblyResizeHash(tok_cnt);  // This makes sure the hash is always big enough.
-    
+
   // This is the cutoff we use after adding in the log-likes (i.e.
   // for the next frame).  This is a bound on the cutoff we will use
   // on the next frame.
   double next_weight_cutoff = std::numeric_limits<double>::infinity();
-  
+
   // First process the best token to get a hopefully
   // reasonably tight bound on the next cutoff.
   if (best_elem) {
@@ -249,6 +249,8 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
       if (arc.ilabel != 0) {  // we'd propagate..
         BaseFloat ac_cost = - decodable->LogLikelihood(frame, arc.ilabel);
         double new_weight = arc.weight.Value() + tok->cost_ + ac_cost;
+        // Add word insertion penalty
+        if (arc.olabel != 0) new_weight += config_.word_ins_penalty;
         if (new_weight + adaptive_beam < next_weight_cutoff)
           next_weight_cutoff = new_weight + adaptive_beam;
       }
@@ -275,6 +277,7 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
         if (arc.ilabel != 0) {  // propagate..
           BaseFloat ac_cost =  - decodable->LogLikelihood(frame, arc.ilabel);
           double new_weight = arc.weight.Value() + tok->cost_ + ac_cost;
+          if (arc.olabel != 0) new_weight += config_.word_ins_penalty;
           if (new_weight < next_weight_cutoff) {  // not pruned..
             Token *new_tok = new Token(arc, ac_cost, tok);
             Elem *e_found = toks_.Find(arc.nextstate);
@@ -304,7 +307,7 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
 
 // TODO: first time we go through this, could avoid using the queue.
 void FasterDecoder::ProcessNonemitting(double cutoff) {
-  // Processes nonemitting arcs for one frame. 
+  // Processes nonemitting arcs for one frame.
   KALDI_ASSERT(queue_.empty());
   for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail)
     queue_.push_back(e->key);
@@ -322,7 +325,8 @@ void FasterDecoder::ProcessNonemitting(double cutoff) {
          aiter.Next()) {
       const Arc &arc = aiter.Value();
       if (arc.ilabel == 0) {  // propagate nonemitting only...
-        Token *new_tok = new Token(arc, tok);
+        Token *new_tok = new Token(
+            arc, arc.olabel != 0 ? config_.word_ins_penalty : 0, tok);
         if (new_tok->cost_ > cutoff) {  // prune
           Token::TokenDelete(new_tok);
         } else {

@@ -145,12 +145,12 @@ bool LatticeFasterDecoder::GetRawLattice(Lattice *ofst,
     TopSortTokens(active_toks_[f].toks, &token_list);
     for (size_t i = 0; i < token_list.size(); i++)
       if (token_list[i] != NULL)
-        tok_map[token_list[i]] = ofst->AddState();    
+        tok_map[token_list[i]] = ofst->AddState();
   }
   // The next statement sets the start state of the output FST.  Because we
   // topologically sorted the tokens, state zero must be the start-state.
   ofst->SetStart(0);
-  
+
   KALDI_VLOG(4) << "init:" << num_toks_/2 + 3 << " buckets:"
                 << tok_map.bucket_count() << " load:" << tok_map.load_factor()
                 << " max:" << tok_map.max_load_factor();
@@ -171,7 +171,11 @@ bool LatticeFasterDecoder::GetRawLattice(Lattice *ofst,
           cost_offset = cost_offsets_[f];
         }
         Arc arc(l->ilabel, l->olabel,
-                Weight(l->graph_cost, l->acoustic_cost - cost_offset),
+                // Remove word_ins_penalty from the graph cost
+                Weight(l->graph_cost - (l->olabel != 0 ?
+                                        config_.word_ins_penalty :
+                                        0.0),
+                       l->acoustic_cost - cost_offset),
                 nextstate);
         ofst->AddArc(cur_state, arc);
       }
@@ -352,7 +356,7 @@ void LatticeFasterDecoder::PruneForwardLinksFinal() {
 
   if (active_toks_[frame_plus_one].toks == NULL)  // empty list; should not happen.
     KALDI_WARN << "No tokens alive at end of file";
-  
+
   typedef unordered_map<Token*, BaseFloat>::const_iterator IterType;
   ComputeFinalCosts(&final_costs_, &final_relative_cost_, &final_best_cost_);
   decoding_finalized_ = true;
@@ -623,7 +627,7 @@ BaseFloat LatticeFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
 
     KALDI_VLOG(6) << "Number of tokens active on frame " << NumFramesDecoded()
                   << " is " << tmp_array_.size();
-    
+
     if (tmp_array_.size() > static_cast<size_t>(config_.max_active)) {
       std::nth_element(tmp_array_.begin(),
                        tmp_array_.begin() + config_.max_active,
@@ -634,7 +638,7 @@ BaseFloat LatticeFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
       if (adaptive_beam)
         *adaptive_beam = max_active_cutoff - best_weight + config_.beam_delta;
       return max_active_cutoff;
-    }     
+    }
     if (tmp_array_.size() > static_cast<size_t>(config_.min_active)) {
       if (config_.min_active == 0) min_active_cutoff = best_weight;
       else {
@@ -645,7 +649,7 @@ BaseFloat LatticeFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
                          tmp_array_.end());
         min_active_cutoff = tmp_array_[config_.min_active];
       }
-    }    
+    }
     if (min_active_cutoff > beam_cutoff) { // min_active is looser than beam.
       if (adaptive_beam)
         *adaptive_beam = min_active_cutoff - best_weight + config_.beam_delta;
@@ -673,7 +677,7 @@ BaseFloat LatticeFasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
   BaseFloat cur_cutoff = GetCutoff(final_toks, &tok_cnt, &adaptive_beam, &best_elem);
   KALDI_VLOG(6) << "Adaptive beam on frame " << NumFramesDecoded() << " is "
                 << adaptive_beam;
-  
+
   PossiblyResizeHash(tok_cnt);  // This makes sure the hash is always big enough.
 
   BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
@@ -695,8 +699,9 @@ BaseFloat LatticeFasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
       Arc arc = aiter.Value();
       if (arc.ilabel != 0) {  // propagate..
         arc.weight = Times(arc.weight,
-                           Weight(cost_offset -
-                                  decodable->LogLikelihood(frame, arc.ilabel)));
+                           Weight(cost_offset
+                                  + (arc.olabel != 0 ? config_.word_ins_penalty : 0)
+                                  - decodable->LogLikelihood(frame, arc.ilabel)));
         BaseFloat new_weight = arc.weight.Value() + tok->tot_cost;
         if (new_weight + adaptive_beam < next_cutoff)
           next_cutoff = new_weight + adaptive_beam;
@@ -725,7 +730,8 @@ BaseFloat LatticeFasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
         if (arc.ilabel != 0) {  // propagate..
           BaseFloat ac_cost = cost_offset -
               decodable->LogLikelihood(frame, arc.ilabel),
-              graph_cost = arc.weight.Value(),
+              graph_cost = arc.weight.Value() + \
+              (arc.olabel != 0 ? config_.word_ins_penalty : 0.0),
               cur_cost = tok->tot_cost,
               tot_cost = cur_cost + ac_cost + graph_cost;
           if (tot_cost > next_cutoff) continue;
@@ -761,7 +767,7 @@ void LatticeFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
   // it may cause us to process states unnecessarily (e.g. more than once),
   // but in the baseline code, turning this vector into a set to fix this
   // problem did not improve overall speed.
-  
+
   KALDI_ASSERT(queue_.empty());
   for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail)
     queue_.push_back(e->key);
@@ -771,7 +777,7 @@ void LatticeFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
       warned_ = true;
     }
   }
-  
+
   while (!queue_.empty()) {
     StateId state = queue_.back();
     queue_.pop_back();
@@ -791,7 +797,8 @@ void LatticeFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
          aiter.Next()) {
       const Arc &arc = aiter.Value();
       if (arc.ilabel == 0) {  // propagate nonemitting only...
-        BaseFloat graph_cost = arc.weight.Value(),
+        BaseFloat graph_cost = arc.weight.Value() + \
+            (arc.olabel != 0 ? config_.word_ins_penalty : 0.0),
             tot_cost = cur_cost + graph_cost;
         if (tot_cost < cutoff) {
           bool changed;

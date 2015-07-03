@@ -50,11 +50,12 @@ struct LatticeFasterDecoderConfig {
   BaseFloat prune_scale;   // Note: we don't make this configurable on the command line,
                            // it's not a very important parameter.  It affects the
                            // algorithm that prunes the tokens as we go.
+  BaseFloat word_ins_penalty;
   // Most of the options inside det_opts are not actually queried by the
   // LatticeFasterDecoder class itself, but by the code that calls it, for
   // example in the function DecodeUtteranceLatticeFaster.
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
-  
+
   LatticeFasterDecoderConfig(): beam(16.0),
                                 max_active(std::numeric_limits<int32>::max()),
                                 min_active(200),
@@ -63,7 +64,8 @@ struct LatticeFasterDecoderConfig {
                                 determinize_lattice(true),
                                 beam_delta(0.5),
                                 hash_ratio(2.0),
-                                prune_scale(0.1) { }
+                                prune_scale(0.1),
+                                word_ins_penalty(0.0) { }
   void Register(OptionsItf *po) {
     det_opts.Register(po);
     po->Register("beam", &beam, "Decoding beam.");
@@ -80,6 +82,8 @@ struct LatticeFasterDecoderConfig {
                  "max-active constraint is applied.  Larger is more accurate.");
     po->Register("hash-ratio", &hash_ratio, "Setting used in decoder to control"
                  " hash behavior");
+    po->Register("word-ins-penalty", &word_ins_penalty,
+                 "Cost added to each output word.");
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && max_active > 1 && lattice_beam > 0.0
@@ -99,7 +103,7 @@ class LatticeFasterDecoder {
   typedef Arc::Label Label;
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
-  
+
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoder(const fst::Fst<fst::StdArc> &fst,
                        const LatticeFasterDecoderConfig &config);
@@ -117,7 +121,7 @@ class LatticeFasterDecoder {
   const LatticeFasterDecoderConfig &GetOptions() const {
     return config_;
   }
-  
+
   ~LatticeFasterDecoder();
 
   /// Decodes until there are no more frames left in the "decodable" object..
@@ -409,7 +413,7 @@ class LatticeFasterDecoder {
 
   void ClearActiveTokens();
 
-  KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoder);  
+  KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoder);
 };
 
 

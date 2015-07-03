@@ -36,12 +36,14 @@ struct FasterDecoderOptions {
   int32 min_active;
   BaseFloat beam_delta;
   BaseFloat hash_ratio;
+  BaseFloat word_ins_penalty;
   FasterDecoderOptions(): beam(16.0),
                           max_active(std::numeric_limits<int32>::max()),
                           min_active(20), // This decoder mostly used for
                                           // alignment, use small default.
                           beam_delta(0.5),
-                          hash_ratio(2.0) { }
+                          hash_ratio(2.0),
+                          word_ins_penalty(0.0) { }
   void Register(OptionsItf *po, bool full) {  /// if "full", use obscure
     /// options too.
     /// Depends on program.
@@ -49,6 +51,8 @@ struct FasterDecoderOptions {
     po->Register("max-active", &max_active, "Decoder max active states.");
     po->Register("min-active", &min_active,
                  "Decoder min active states (don't prune if #active less than this).");
+    po->Register("word-ins-penalty", &word_ins_penalty,
+                 "Cost added to each output word.");
     if (full) {
       po->Register("beam-delta", &beam_delta,
                    "Increment used in decoder [obscure setting]");
@@ -69,7 +73,7 @@ class FasterDecoder {
                 const FasterDecoderOptions &config);
 
   void SetOptions(const FasterDecoderOptions &config) { config_ = config; }
-  
+
   ~FasterDecoder() { ClearToks(toks_.Clear()); }
 
   void Decode(DecodableInterface *decodable);
@@ -83,13 +87,13 @@ class FasterDecoder {
   /// final-probs. Returns true if the output best path was not the empty
   /// FST (will only return false in unusual circumstances where
   /// no tokens survived).
-  bool GetBestPath(fst::MutableFst<LatticeArc> *fst_out, 
+  bool GetBestPath(fst::MutableFst<LatticeArc> *fst_out,
                    bool use_final_probs = true);
 
   /// As a new alternative to Decode(), you can call InitDecoding
   /// and then (possibly multiple times) AdvanceDecoding().
   void InitDecoding();
-  
+
 
   /// This will decode until there are no more frames ready in the decodable
   /// object, but if max_num_frames is >= 0 it will decode no more than
@@ -97,9 +101,9 @@ class FasterDecoder {
   void AdvanceDecoding(DecodableInterface *decodable,
                        int32 max_num_frames = -1);
 
-  /// Returns the number of frames already decoded.  
+  /// Returns the number of frames already decoded.
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
-  
+
  protected:
 
   class Token {
