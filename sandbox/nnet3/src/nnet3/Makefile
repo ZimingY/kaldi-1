@@ -8,9 +8,9 @@ LDLIBS += $(CUDA_LDLIBS)
 
 
 TESTFILES = natural-gradient-online-test nnet-graph-test \
-  nnet-descriptor-test nnet-parse-test  \
+  nnet-descriptor-test nnet-parse-test nnet-component-test \
   nnet-compile-utils-test nnet-nnet-test nnet-utils-test \
-  nnet-compile-test nnet-analyze-test
+  nnet-compile-test nnet-analyze-test nnet-optimize-test
 
 OBJFILES = nnet-common.o nnet-compile.o nnet-component-itf.o \
   nnet-simple-component.o \
